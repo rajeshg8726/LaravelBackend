@@ -18,6 +18,11 @@ class Jobs extends Model
         'location',
         'description',
         'jobtype',
+        'jobbyrole',
+        'jobbycity',
+        'batch1',
+        'batch2',
+        'batch3',
         'joblink',
         'batches',
         'image'

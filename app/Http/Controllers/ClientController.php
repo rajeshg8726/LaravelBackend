@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Jobs;
 use App\Models\Contactus;
 use Illuminate\Http\Request;
+use App\Models\Userinterviews;
 use Illuminate\Support\Facades\Validator;
 
 class ClientController extends Controller
@@ -13,7 +14,9 @@ class ClientController extends Controller
     // Getting all the jobs from db
     public function index(){
         
-        $jobdata = Jobs::all();
+        // Fetch jobs data in reverse order (latest records first)
+    $jobdata = Jobs::orderBy('created_at', 'desc')->get();
+
 
         if($jobdata->count() > 0){
 
@@ -76,6 +79,25 @@ class ClientController extends Controller
             }
 
 
+    }
+
+
+    public function userAddedInvExp (Request $request ){
+        $data = $request->validate([
+            'email' => 'nullable|email',
+            'name' => 'nullable|string|max:255',
+            'companyName' => 'nullable|string|max:255',
+            'rounds' => 'nullable|integer',
+            'experience' => 'nullable|string',
+            'jobRole' => 'nullable|string|max:255',
+            'details' => 'nullable|string',
+            'anonymous' => 'boolean',
+        ]);
+
+        $interview = Userinterviews::create($data);
+
+        return response()->json(['message' => 'Interview data stored successfully!', 'data' => $interview]);
+  
     }
 
 }
