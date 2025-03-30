@@ -25,6 +25,8 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 
 Route::get('getAllJobs', [ClientController::class, 'index'] );
 Route::post('contactus',[ClientController::class,'contactUs']);
+Route::get('jobs-search', [ClientController::class, 'search']);
+
 Route::post('job',[AdminController::class,'insertJobs']);
 Route::get('job/{id}',[AdminController::class,'jobsbyId']);
 Route::post('login',[AdminController::class,'login']);

@@ -100,4 +100,32 @@ class ClientController extends Controller
   
     }
 
+    // Frontend Search functionality, this functions work as the primary for loading the whole jobs on front page
+    public function search(Request $request)
+    {
+        $query = Jobs::query();
+
+        // Filter by role if provided
+        if ($request->filled('role')) {
+            $query->where('role', 'LIKE', '%' . $request->role . '%');
+        }
+
+        // Filter by location if provided
+        if ($request->filled('location')) {
+            $query->where('location', 'LIKE', '%' . $request->location . '%');
+        }
+
+        // Filter by keyword (in title or description)
+        if ($request->filled('searchTerm')) {
+            $query->where(function ($q) use ($request) {
+                $q->where('title', 'LIKE', '%' . $request->searchTerm . '%')
+                  ->orWhere('description', 'LIKE', '%' . $request->searchTerm . '%');
+            });
+        }
+
+        $jobs = $query->orderBy('created_at', 'desc')->get(); // to get the last inserted job at first
+
+        return response()->json($jobs);
+    }
+
 }
