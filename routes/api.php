@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\ClientController;
 use App\Http\Controllers\InterviewController;
+use App\Http\Controllers\SitemapController;
 
 
 /*
@@ -18,6 +19,9 @@ use App\Http\Controllers\InterviewController;
 |
 */
 
+
+
+
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
@@ -26,6 +30,7 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 Route::get('getAllJobs', [ClientController::class, 'index'] );
 Route::post('contactus',[ClientController::class,'contactUs']);
 Route::get('jobs-search', [ClientController::class, 'search']);
+Route::get('/sitemap.xml', [SitemapController::class, 'generateSitemap']);
 
 Route::post('job',[AdminController::class,'insertJobs']);
 Route::get('job/{id}',[AdminController::class,'jobsbyId']);
