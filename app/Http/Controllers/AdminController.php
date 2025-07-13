@@ -48,7 +48,11 @@ class AdminController extends Controller
             'role' => 'required|string|max:255',
             'pay' => 'required|string|max:255',
             'location' => 'required|string|max:255',
-            'description' => 'required|string',
+            'description' => 'nullable|string',
+            'eligibility' => 'nullable|string',
+            'rolesAndResponsibilities' => 'nullable|string',
+            'niceToHave' => 'nullable|string',
+            'requirements' => 'nullable|string',
             'jobtype' => 'required|string|max:255',
             'jobbyrole' => 'required|int|max:255',
             'jobbycity' => 'required|int|max:255',
@@ -80,6 +84,10 @@ if ($request->hasFile('companyLogo')) {
             'pay' => $validatedData['pay'],
             'location' => $validatedData['location'],
             'description' => $validatedData['description'],
+            'eligibility' => $validatedData['eligibility'],
+            'rolesAndResponsibilities' => $validatedData['rolesAndResponsibilities'],
+            'requirements' => $validatedData['requirements'],
+            'niceToHave' => $validatedData['niceToHave'],
             'jobtype' => $validatedData['jobtype'],
             'jobbyrole' => $validatedData['jobbyrole'],
             'jobbycity' => $validatedData['jobbycity'],
@@ -125,12 +133,13 @@ if ($request->hasFile('companyLogo')) {
         ], 404);
     }
 
-    // Get the path to the image associated with this job
-    $imagePath = public_path($specificJobToDelete->image);
 
-    // Check if the image file exists and delete it
-    if (file_exists($imagePath)) {
-        unlink($imagePath);
+    // Only delete the image if it exists and is not a default/placeholder image
+    if (!empty($specificJobToDelete->image) && $specificJobToDelete->image !== 'uploads/default.png') {
+        $imagePath = public_path($specificJobToDelete->image);
+        if (file_exists($imagePath)) {
+            unlink($imagePath);
+        }
     }
 
     // Delete the job from the database
@@ -155,6 +164,10 @@ public function updateJob(Request $request, $id)
         'pay' => 'nullable|string|max:255',
         'location' => 'nullable|string|max:255',
         'description' => 'nullable|string',
+        'eligibility' => 'nullable|string',
+        'rolesAndResponsibilities' => 'nullable|string',
+        'niceToHave' => 'nullable|string',
+        'requirements' => 'nullable|string',
         'jobtype' => 'nullable|string|max:255',
         'jobbyrole' => 'nullable|integer|max:255',
         'jobbycity' => 'nullable|integer|max:255',
@@ -188,6 +201,10 @@ public function updateJob(Request $request, $id)
         'pay' => $validatedData['pay'] ?? $job->pay,
         'location' => $validatedData['location'] ?? $job->location,
         'description' => $validatedData['description'] ?? $job->description,
+        'eligibility' => $validatedData['eligibility'] ?? $job->eligibility,
+        'rolesAndResponsibilities' => $validatedData['rolesAndResponsibilities'] ?? $job->rolesAndResponsibilities,
+        'requirements' => $validatedData['requirements'] ?? $job->requirements,
+        'niceToHave' => $validatedData['niceToHave'] ?? $job->niceToHave,
         'jobtype' => $validatedData['jobtype'] ?? $job->jobtype,
         'jobbyrole' => $validatedData['jobbyrole'] ?? $job->jobbyrole,
         'jobbycity' => $validatedData['jobbycity'] ?? $job->jobbycity,

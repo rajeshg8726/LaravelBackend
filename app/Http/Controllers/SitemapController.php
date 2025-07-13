@@ -1,16 +1,18 @@
 <?php
-// filepath: app/Http/Controllers/SitemapController.php
 namespace App\Http\Controllers;
 
+use App\Models\Jobs;
 use Illuminate\Http\Request;
-use App\Models\Job; // Assuming you have a Job model
 
 class SitemapController extends Controller
 {
     public function generateSitemap()
     {
         // Fetch all jobs from the database
-        $jobs = Job::all();
+        $jobs = Jobs::all();
+
+        // Use the FRONTEND_URL from the .env file
+        $frontendUrl = config('app.frontend_url', url('/')); // Default to backend URL if FRONTEND_URL is not set
 
         // Create the XML structure
         $sitemap = '<?xml version="1.0" encoding="UTF-8"?>';
@@ -19,25 +21,25 @@ class SitemapController extends Controller
         // Add static pages
         $sitemap .= '
             <url>
-                <loc>' . url('/') . '</loc>
+                <loc>' . $frontendUrl . '</loc>
                 <lastmod>' . now()->toDateString() . '</lastmod>
                 <changefreq>daily</changefreq>
                 <priority>1.0</priority>
             </url>
             <url>
-                <loc>' . url('/about') . '</loc>
+                <loc>' . $frontendUrl . '/about</loc>
                 <lastmod>' . now()->toDateString() . '</lastmod>
                 <changefreq>monthly</changefreq>
                 <priority>0.8</priority>
             </url>
             <url>
-                <loc>' . url('/contact') . '</loc>
+                <loc>' . $frontendUrl . '/contact</loc>
                 <lastmod>' . now()->toDateString() . '</lastmod>
                 <changefreq>monthly</changefreq>
                 <priority>0.8</priority>
             </url>
             <url>
-                <loc>' . url('/updates') . '</loc>
+                <loc>' . $frontendUrl . '/updates</loc>
                 <lastmod>' . now()->toDateString() . '</lastmod>
                 <changefreq>weekly</changefreq>
                 <priority>0.7</priority>
@@ -48,7 +50,7 @@ class SitemapController extends Controller
         foreach ($jobs as $job) {
             $sitemap .= '
                 <url>
-                    <loc>' . url('/job/' . $job->id . '-' . \Str::slug($job->title)) . '</loc>
+                    <loc>' . $frontendUrl . '/job/' . $job->id . '/' . \Str::slug($job->title) . '</loc>
                     <lastmod>' . $job->updated_at->toDateString() . '</lastmod>
                     <changefreq>daily</changefreq>
                     <priority>0.9</priority>
