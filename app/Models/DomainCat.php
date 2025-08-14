@@ -5,10 +5,9 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class Roles extends Model
+class DomainCat extends Model
 {
     use HasFactory;
-
-    protected $table = 'jobsbyroles'; // Specify the table name where data is saved
+    protected $table = 'jobsbydomain'; // Specify the table name where data is saved
     protected $fillable = ['name'];
 }

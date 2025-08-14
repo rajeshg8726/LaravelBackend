@@ -9,6 +9,6 @@ class Companies extends Model
 {
     use HasFactory;
 
-    protected $table = 'company'; // Specify the table name where data is saved
+    protected $table = 'jobsbcompanytype'; // Specify the table name where data is saved
     protected $fillable = ['name'];
 }

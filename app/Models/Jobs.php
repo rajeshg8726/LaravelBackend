@@ -27,6 +27,8 @@ class Jobs extends Model
         'batch1',
         'batch2',
         'batch3',
+        'jobpayrange', // Optional field for job pay range
+        'jobexplevel', // for job experience level like intern, fresher,
         'joblink',
         'batches',
         'image'
