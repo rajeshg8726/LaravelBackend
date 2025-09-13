@@ -28,16 +28,16 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 });
 
 
-Route::get('getAllJobs', [ClientController::class, 'index'] );
-Route::post('contactus',[ClientController::class,'contactUs']);
+Route::get('getAllJobs', [ClientController::class, 'index']);
+Route::post('contactus', [ClientController::class, 'contactUs']);
 Route::get('jobs-search', [ClientController::class, 'search']);
 Route::get('sitemap.xml', [SitemapController::class, 'generateSitemap']);
 
-Route::post('job',[AdminController::class,'insertJobs']);
-Route::get('job/{id}',[AdminController::class,'jobsbyId']);
-Route::post('login',[AdminController::class,'login']);
-Route::delete('deletejob/{id}',[AdminController::class,'deleteJob']);
-Route::delete('deleteFeedback/{id}',[AdminController::class,'deleteUserFeedback']);
+Route::post('job', [AdminController::class, 'insertJobs']);
+Route::get('job/{id}', [AdminController::class, 'jobsbyId']);
+Route::post('login', [AdminController::class, 'login']);
+Route::delete('deletejob/{id}', [AdminController::class, 'deleteJob']);
+Route::delete('deleteFeedback/{id}', [AdminController::class, 'deleteUserFeedback']);
 Route::post('updateJob/{id}', [AdminController::class, 'updateJob']);
 Route::get('getContacts', [AdminController::class, 'getContactUs']);
 Route::get('getAllBatches', [AdminController::class, 'getAllBatches']);
@@ -64,8 +64,7 @@ Route::get('getBlockchainJobs', [AdminController::class, 'getBlockchainJobs']);
 Route::get('getCloudComputingJobs', [AdminController::class, 'getCloudComputingJobs']);
 Route::get('getGameDevelopmentJobs', [AdminController::class, 'getGameDevelopmentJobs']);
 Route::get('getAppDevelopmentJobs', [AdminController::class, 'getAppDevelopmentJobs']);
-Route::get('getWebDevelopmentJobs', [AdminController::class, 'getWebDevelopment
-Jobs']);
+Route::get('getWebDevelopmentJobs', [AdminController::class, 'getWebDevelopmentJobs']);
 Route::get('getARVRJobs', [AdminController::class, 'getARVRJobs']);
 Route::get('getOpenSourceHackathonJobs', [AdminController::class, 'getOpenSourceHackathonJobs']);
 
@@ -104,15 +103,12 @@ Route::get('getMachineLearningEngineerJobs', [AdminController::class, 'getMachin
 
 
 
-// Interview Experience Routes
-Route::post('userAddedInvExp', [ClientController::class, 'userAddedInvExp']);
-Route::get('getUsersInvExps', [InterviewController::class, 'getUsersInvExps']);
-Route::get('getAdminAddedInvExps', [InterviewController::class, 'getAdminAddedInvExps']);
-Route::get('interviewById/{id}',[InterviewController::class,'interviewById']);
-Route::get('getAdminAddedInvById/{id}',[InterviewController::class,'getAdminAddedInvById']);
-Route::post('updateAndSaveInvExps', [InterviewController::class, 'updateAndSaveInvExps']);
-Route::delete('deleteUserAddedInvExp/{id}',[InterviewController::class,'deleteUserAddedInvExp']);
-Route::delete('deleteAdminAddedInvExp/{id}',[InterviewController::class,'deleteAdminAddedInvExp']);
+// Interview Blog Posts Routes
+Route::post('insertBlogPosts', [ClientController::class, 'insertBlogPosts']);
+Route::post('subscribeNewsletter', [ClientController::class, 'userSubscribeForEmailNotify']);
+Route::get('getAllBlogPosts', [ClientController::class, 'getAllBlogPosts']);
+Route::get('getBlogPostsByID/{id}', [ClientController::class, 'getBlogPostsByID']);
+Route::delete('deletePost/{id}', [AdminController::class, 'deletePost']);
 
 
 // Categories Routes
@@ -130,7 +126,7 @@ Route::post('insertDomainCat', [Categories::class, 'insertDomainCat']);
 Route::get('getDomainCat', [Categories::class, 'geDomainCat']);
 Route::post('insertExpLevelCat', [Categories::class, 'insertExpLevelCat']);
 Route::get('getExpLevelCat', [Categories::class, 'getExpLevelCat']);
-Route::post('insertLocationCat', [Categories::class, 'insertLocationCat']); 
+Route::post('insertLocationCat', [Categories::class, 'insertLocationCat']);
 Route::get('getLocationCat', [Categories::class, 'getLocationCat']);
 Route::post('insertPayCat', [Categories::class, 'insertPayCat']);
 Route::get('getPayCat', [Categories::class, 'getPayCat']);
@@ -138,4 +134,3 @@ Route::post('insertPayCat', [Categories::class, 'insertPayCat']);
 Route::get('getPayCat', [Categories::class, 'getPayCat']);
 Route::post('insertBatchCat', [Categories::class, 'insertBatchCat']);
 Route::get('getBatchCat', [Categories::class, 'getBatchCat']);
-
