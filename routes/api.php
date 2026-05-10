@@ -1,12 +1,17 @@
 <?php
 
-use Illuminate\Http\Request;
-use App\Http\Controllers\Categories;
-use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Admin\AdminAuthController;
+use App\Http\Controllers\Admin\AdminJobController;
+use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AiMatchController;
+use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CandidateController;
+use App\Http\Controllers\Categories;
 use App\Http\Controllers\ClientController;
 use App\Http\Controllers\SitemapController;
-use App\Http\Controllers\InterviewController;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 
 
 /*
@@ -28,14 +33,42 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 });
 
 
+// Public Routes
+Route::post('/register/candidate', [AuthController::class, 'registerCandidate']);
+Route::post('/register/employer', [AuthController::class, 'registerEmployer']);
+Route::post('/login', [AuthController::class, 'login']);
+// Protected Routes (Requires a valid token)
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/logout', [AuthController::class, 'logout']);
+
+    // Future expansion:
+    Route::get('/candidate/profile', [CandidateController::class, 'profile']);
+    Route::put('/candidate/profile', [CandidateController::class, 'updateProfile']);
+    Route::post('/candidate/profile/image', [CandidateController::class, 'updateProfileImage']);
+    Route::post('/candidate/profile/resume', [CandidateController::class, 'updateResume']);
+
+
+
+    // AI Match Route 
+    Route::post('/candidate/generate-match', [AiMatchController::class, 'generateMatch']);
+});
+
+
+// Forgot / Reset Password (public — no token needed)
+Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
+Route::post('/reset-password',  [AuthController::class, 'resetPassword']);
+
+
+
 Route::get('getAllJobs', [ClientController::class, 'index']);
 Route::post('contactus', [ClientController::class, 'contactUs']);
 Route::get('jobs-search', [ClientController::class, 'search']);
+Route::post('/jobs/filter', [ClientController::class, 'filter']);
 Route::get('sitemap.xml', [SitemapController::class, 'generateSitemap']);
 
 Route::post('job', [AdminController::class, 'insertJobs']);
 Route::get('job/{id}', [AdminController::class, 'jobsbyId']);
-Route::post('login', [AdminController::class, 'login']);
+Route::post('adminlogin', [AdminController::class, 'login']);
 Route::delete('deletejob/{id}', [AdminController::class, 'deleteJob']);
 Route::delete('deleteFeedback/{id}', [AdminController::class, 'deleteUserFeedback']);
 Route::post('updateJob/{id}', [AdminController::class, 'updateJob']);
@@ -106,6 +139,7 @@ Route::get('getMachineLearningEngineerJobs', [AdminController::class, 'getMachin
 // Interview Blog Posts Routes
 Route::post('insertBlogPosts', [ClientController::class, 'insertBlogPosts']);
 Route::post('subscribeNewsletter', [ClientController::class, 'userSubscribeForEmailNotify']);
+Route::get('getAllUserSubscriberForEmailNotify', [ClientController::class, 'getAllUserSubscriberForEmailNotify']);
 Route::get('getAllBlogPosts', [ClientController::class, 'getAllBlogPosts']);
 Route::get('getBlogPostsByID/{id}', [ClientController::class, 'getBlogPostsByID']);
 Route::delete('deletePost/{id}', [AdminController::class, 'deletePost']);
@@ -134,3 +168,28 @@ Route::post('insertPayCat', [Categories::class, 'insertPayCat']);
 Route::get('getPayCat', [Categories::class, 'getPayCat']);
 Route::post('insertBatchCat', [Categories::class, 'insertBatchCat']);
 Route::get('getBatchCat', [Categories::class, 'getBatchCat']);
+
+
+
+// ── Admin Routes ───────────────────────────────────────────────
+Route::prefix('admin')->group(function () {
+    // Public: no token required
+    Route::post('/login',  [AdminAuthController::class, 'login']);
+    // Protected: valid admin token required
+    Route::middleware(['auth:sanctum', 'admin'])->group(function () {
+        Route::post('/logout', [AdminAuthController::class, 'logout']);
+        // Stats
+        Route::get('/stats', [AdminJobController::class, 'stats']);
+        // Jobs CRUD
+        Route::get('/jobs',                    [AdminJobController::class, 'index']);
+        Route::get('/jobs/{id}',               [AdminJobController::class, 'show']);
+        Route::put('/jobs/{id}',               [AdminJobController::class, 'update']);
+        Route::put('/jobs/{id}/toggle-featured',[AdminJobController::class, 'toggleFeatured']);
+        Route::put('/jobs/{id}/toggle-urgent', [AdminJobController::class, 'toggleUrgent']);
+        Route::delete('/jobs/{id}',            [AdminJobController::class, 'destroy']);
+        Route::post('/jobs/{id}/logo',         [AdminJobController::class, 'uploadLogo']);
+        // Users
+        Route::get('/users',                        [AdminUserController::class, 'index']);
+        Route::put('/users/{id}/toggle-status',     [AdminUserController::class, 'toggleStatus']);
+    });
+});

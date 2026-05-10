@@ -115,6 +115,88 @@ class ClientController extends Controller
         return response()->json($jobs);
     }
 
+
+    public function filter(Request $request)
+{
+    $query = Jobs::query();
+
+    // 1. Keyword search (Search bar)
+    if ($request->filled('search')) {
+        $searchTerm = $request->search;
+        $query->where(function ($q) use ($searchTerm) {
+            $q->where('title', 'LIKE', '%' . $searchTerm . '%')
+              ->orWhere('description', 'LIKE', '%' . $searchTerm . '%')
+              ->orWhere('role', 'LIKE', '%' . $searchTerm . '%');
+        });
+    }
+
+    // 2. Filter by Roles Array (e.g., ["Frontend", "Backend"])
+    if ($request->filled('roles') && is_array($request->roles)) {
+        $query->where(function ($q) use ($request) {
+            foreach ($request->roles as $role) {
+                $q->orWhere('role', 'LIKE', '%' . $role . '%');
+            }
+        });
+    }
+
+    // 3. Filter by Locations Array (e.g., ["Bengaluru", "Hyderabad"])
+    if ($request->filled('locations') && is_array($request->locations)) {
+        $query->where(function ($q) use ($request) {
+            foreach ($request->locations as $loc) {
+                $q->orWhere('location', 'LIKE', '%' . $loc . '%');
+            }
+        });
+    }
+
+    // 4. Filter by Batches Array (e.g., ["2024", "2025"])
+    if ($request->filled('batches') && is_array($request->batches)) {
+        $query->where(function ($q) use ($request) {
+            foreach ($request->batches as $batch) {
+                $q->orWhere('batches', 'LIKE', '%' . $batch . '%');
+            }
+        });
+    }
+
+    // 5. Filter by Experience / Job Type (Flexible mapping)
+    // If you don't have dedicated string columns for these, we can search the title/description
+    // or map them to your jobexplevel integer in the future. For now, doing a broad text search:
+    if ($request->filled('experience') && is_array($request->experience)) {
+        $query->where(function ($q) use ($request) {
+            foreach ($request->experience as $exp) {
+                $q->orWhere('title', 'LIKE', '%' . $exp . '%')
+                  ->orWhere('description', 'LIKE', '%' . $exp . '%');
+            }
+        });
+    }
+
+    if ($request->filled('jobType') && is_array($request->jobType)) {
+        $query->where(function ($q) use ($request) {
+            foreach ($request->jobType as $type) {
+                $q->orWhere('title', 'LIKE', '%' . $type . '%');
+            }
+        });
+    }
+
+    // Use built-in pagination (10 jobs per page)
+    $perPage = 10;
+    $jobs = $query->orderBy('created_at', 'desc')->paginate($perPage);
+
+    // Return the response matching our Next.js frontend requirements
+    return response()->json([
+        'success' => true,
+        'jobs' => $jobs->items(),
+        'total' => $jobs->total(),
+        'page' => $jobs->currentPage(),
+        'totalPages' => $jobs->lastPage()
+    ]);
+}
+
+
+
+
+
+
+
     public function insertBlogPosts(Request $request)
     {
         $data = $request->validate([
@@ -185,4 +267,15 @@ class ClientController extends Controller
             ], 404);
         }
     }
+
+    public function getAllUserSubscriberForEmailNotify()
+    {
+        $subscribers = UserEmail::all();
+        return response()->json([
+            'status' => 200,
+            'subscribers' => $subscribers,
+        ]);
+    }
+
+    
 }

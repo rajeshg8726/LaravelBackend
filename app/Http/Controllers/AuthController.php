@@ -1,0 +1,169 @@
+<?php
+
+// In app/Http/Controllers/AuthController.php
+namespace App\Http\Controllers;
+
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Str;
+use Illuminate\Auth\Events\PasswordReset;
+
+
+class AuthController extends Controller
+{
+    // ----- CANDIDATE REGISTRATION -----
+    public function registerCandidate(Request $request)
+    {
+        $request->validate([
+            'fullName' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:users',
+            'password' => 'required|string|min:6',
+        ]);
+
+        $user = User::create([
+            'full_name' => $request->fullName,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),
+            'is_employer' => false,
+        ]);
+
+        return response()->json(['success' => true, 'message' => 'Candidate registered successfully'], 201);
+    }
+
+    // ----- EMPLOYER REGISTRATION -----
+    public function registerEmployer(Request $request)
+    {
+        $request->validate([
+            'companyName' => 'required|string|max:255',
+            'fullName' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:users',
+            'password' => 'required|string|min:6',
+        ]);
+
+        $user = User::create([
+            'full_name' => $request->fullName,
+            'company_name' => $request->companyName,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),
+            'is_employer' => true,
+        ]);
+
+        return response()->json(['success' => true, 'message' => 'Employer registered successfully'], 201);
+    }
+
+    // ----- LOGIN -----
+    public function login(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'password' => 'required'
+        ]);
+
+        if (!Auth::attempt($request->only('email', 'password'))) {
+            return response()->json(['message' => 'Invalid credentials'], 401);
+        }
+
+        $user = User::where('email', $request->email)->firstOrFail();
+        
+        // Generate Token
+        $token = $user->createToken('auth_token')->plainTextToken;
+
+        // Front-end needs to know who logged in to route correctly!
+        $userType = $user->is_employer ? 'Employer' : 'Candidate';
+
+        return response()->json([
+            'token' => $token,
+            'userType' => $userType,
+            'user' => [
+                'id' => $user->id,
+                'fullName' => $user->full_name,
+                'email' => $user->email,
+                'companyName' => $user->company_name,
+                'profileImage' => $user->profile_image
+            ]
+        ], 200);
+    }
+
+    // ----- LOGOUT -----
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();
+        return response()->json(['success' => true]);
+    }
+
+
+    /**
+ * POST /api/forgot-password
+ * Sends a password reset email to the user.
+ */
+public function forgotPassword(Request $request)
+{
+    $request->validate([
+        'email' => 'required|email|exists:users,email',
+    ]);
+
+    $status = Password::sendResetLink(
+        $request->only('email')
+    );
+
+    if ($status === Password::RESET_LINK_SENT) {
+        return response()->json([
+            'status'  => $status,
+            'message' => 'Password reset link has been sent to your email.',
+        ]);
+    }
+
+    return response()->json([
+        'message' => __($status),
+    ], 400);
+}
+
+/**
+ * POST /api/reset-password
+ * Validates the token and updates the user's password.
+ */
+public function resetPassword(Request $request)
+{
+    $request->validate([
+        'token'                 => 'required|string',
+        'email'                 => 'required|email',
+        'password'              => 'required|min:8|confirmed',
+        'password_confirmation' => 'required',
+    ]);
+
+    $status = Password::reset(
+        $request->only('email', 'password', 'password_confirmation', 'token'),
+        function (User $user, string $password) {
+            $user->forceFill([
+                'password' => Hash::make($password),
+            ])->setRememberToken(Str::random(60));
+
+            $user->save();
+
+            event(new PasswordReset($user));
+        }
+    );
+
+    if ($status === Password::PASSWORD_RESET) {
+        return response()->json([
+            'status'  => $status,
+            'message' => 'Password has been reset successfully.',
+        ]);
+    }
+
+    return response()->json([
+        'message' => __($status),
+    ], 400);
+}
+
+
+
+
+
+
+
+}
+

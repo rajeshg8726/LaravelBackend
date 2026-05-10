@@ -31,6 +31,8 @@ class Jobs extends Model
         'jobexplevel', // for job experience level like intern, fresher,
         'joblink',
         'batches',
-        'image'
+        'image',
+        'is_featured', 
+        'is_urgent',
     ];
 }
