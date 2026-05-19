@@ -19,7 +19,7 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['http://localhost:3000', 'https://ubiquitous-acorn-q6g6q4qjwrw269gx-3000.app.github.dev'],
+    'allowed_origins' => ['http://localhost:3000', 'https://ubiquitous-acorn-q6g6q4qjwrw269gx-3000.app.github.dev', 'https://rgjobs.in', 'https://www.rgjobs.in', env('FRONTEND_URL', 'http://localhost:3000')],
 
     'allowed_origins_patterns' => [],
 

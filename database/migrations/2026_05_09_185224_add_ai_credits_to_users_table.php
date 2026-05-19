@@ -7,9 +7,12 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up() {
         Schema::table('users', function (Blueprint $table) {
-            // Give every user 3 free credits by default
-            $table->integer('ai_credits')->default(3)->after('email');
-            $table->boolean('is_pro')->default(false)->after('ai_credits');
+            if (!Schema::hasColumn('users', 'ai_credits')) {
+                $table->integer('ai_credits')->default(3)->after('email');
+            }
+            if (!Schema::hasColumn('users', 'is_pro')) {
+                $table->boolean('is_pro')->default(false)->after('ai_credits');
+            }
         });
     }
 

@@ -25,6 +25,9 @@ class CandidateController extends Controller
                 'bio'           => $user->bio,
                 'skills'        => $user->skills ?? [],   // stored as JSON, returned as array
                 'profile_image' => $user->profile_image,
+                'is_pro'       => $user->is_pro,
+                'pro_expires_at' => $user->pro_expires_at,
+                'is_active'     => $user->is_active,
                 'resume'        => $user->resume,
                 'created_at'    => $user->created_at,
             ],

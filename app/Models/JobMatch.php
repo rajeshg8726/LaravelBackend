@@ -8,6 +8,20 @@ class JobMatch extends Model
 {
     use HasFactory;
     
-    protected $fillable = ['user_id', 'job_id', 'match_score', 'ai_feedback','missing_keywords', 
-    'cover_letter'];
+    protected $fillable = [
+    'user_id', 
+    'job_id', 
+    'match_score', 
+    'ai_feedback', 
+    'missing_keywords', 
+    'cover_letter',
+    'interview_questions',
+    'optimized_profile',
+    'salary_benchmark'
+];
+
+    public function job()
+    {
+        return $this->belongsTo(Jobs::class, 'job_id');
+    }
 }

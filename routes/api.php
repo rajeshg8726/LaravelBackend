@@ -12,6 +12,8 @@ use App\Http\Controllers\ClientController;
 use App\Http\Controllers\SitemapController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\PaymentController;
+
 
 
 /*
@@ -51,6 +53,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // AI Match Route 
     Route::post('/candidate/generate-match', [AiMatchController::class, 'generateMatch']);
+    Route::get('/candidate/my-ai-matches', [AiMatchController::class, 'myMatches']);
+
+    Route::post('/payments/create-order', [PaymentController::class, 'createOrder']);
+    Route::post('/payments/verify', [PaymentController::class, 'verifyPayment']);
 });
 
 
@@ -58,6 +64,8 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password',  [AuthController::class, 'resetPassword']);
 
+// Webhook Route (Open to public, verified by signature)
+Route::post('/webhooks/razorpay', [PaymentController::class, 'webhook']);
 
 
 Route::get('getAllJobs', [ClientController::class, 'index']);
@@ -191,5 +199,8 @@ Route::prefix('admin')->group(function () {
         // Users
         Route::get('/users',                        [AdminUserController::class, 'index']);
         Route::put('/users/{id}/toggle-status',     [AdminUserController::class, 'toggleStatus']);
+        Route::get('/pro-subscribers',              [AdminUserController::class, 'proSubscribers']);
+        Route::get('/ai-usage',                     [AdminUserController::class, 'aiUsage']);
+        Route::get('/transactions',                 [AdminUserController::class, 'transactions']);
     });
 });
