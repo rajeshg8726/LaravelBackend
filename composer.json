@@ -12,6 +12,7 @@
         "laravel/sanctum": "^3.0",
         "laravel/tinker": "^2.7",
         "razorpay/razorpay": "^2.9",
+        "smalot/pdfparser": "^2.12",
         "spatie/laravel-sitemap": "^6.4"
     },
     "require-dev": {

@@ -9,15 +9,16 @@ class JobMatch extends Model
     use HasFactory;
     
     protected $fillable = [
-    'user_id', 
-    'job_id', 
-    'match_score', 
-    'ai_feedback', 
-    'missing_keywords', 
+    'user_id',
+    'job_id',
+    'match_score',
+    'ai_feedback',
+    'missing_keywords',
     'cover_letter',
     'interview_questions',
     'optimized_profile',
-    'salary_benchmark'
+    'salary_benchmark',
+    'score_breakdown',
 ];
 
     public function job()

@@ -10,8 +10,13 @@ use Illuminate\Support\Facades\Log;
 
 class AiMatchController  extends Controller
 {
-    // ✅ Use a larger model — 8b is too small for complex structured JSON
-    private string $model = 'llama-3.3-70b-versatile';
+    /* ──────────────────────────────────────────────────────────────────
+     * MODEL CONFIG
+     * Free users  → Groq + Llama 3.3 70B   (cheap & fast)
+     * PRO  users  → Gemini 2.5 Flash        (premium quality)
+     * ────────────────────────────────────────────────────────────── */
+    private string $groqModel   = 'llama-3.3-70b-versatile';
+    private string $geminiModel = 'gemini-2.5-flash';
 
     public function generateMatch(Request $request)
     {
@@ -35,13 +40,28 @@ class AiMatchController  extends Controller
             $existingMatch->delete();
         }
 
-        // 2. Check credits
-        if (!$user->is_pro && $user->ai_credits <= 0) {
-            return response()->json([
-                'success'          => false,
-                'message'          => 'Out of credits',
-                'requires_upgrade' => true
-            ], 402);
+        // 2. Check and deduct credits (first analysis is free)
+        // Evaluate PRO status here too — expired PRO users must use credits
+        $isActivePro = $user->is_pro
+            && $user->pro_expires_at !== null
+            && $user->pro_expires_at->isFuture();
+
+        $isFirstFree = !$user->is_first_analysis_free_used;
+        $creditDeducted = false;
+
+        if (!$isActivePro) {
+            if (!$isFirstFree) {
+                if ($user->ai_credits <= 0) {
+                    return response()->json([
+                        'success'          => false,
+                        'message'          => 'Out of credits',
+                        'requires_upgrade' => true
+                    ], 402);
+                }
+                // Deduct credit upfront to prevent concurrency exploits
+                $user->decrement('ai_credits');
+                $creditDeducted = true;
+            }
         }
 
         // 3. Load job and build profile strings
@@ -52,8 +72,43 @@ class AiMatchController  extends Controller
             return $field ?? 'Not provided';
         };
 
-        $candidateProfile = "Skills: "    . $formatField($user->skills)     .
-            "\nBio: "        . $formatField($user->bio);
+        $formatExperience = function ($exp) {
+            if (empty($exp) || !is_array($exp)) return "Not provided";
+            $formatted = [];
+            foreach ($exp as $item) {
+                $role = $item['role'] ?? 'Role';
+                $company = $item['company'] ?? 'Company';
+                $from = $item['from_year'] ?? '';
+                $to = !empty($item['is_current']) ? 'Present' : ($item['to_year'] ?? 'N/A');
+                $formatted[] = "- {$role} at {$company} ({$from} – {$to})";
+            }
+            return implode("\n", $formatted);
+        };
+
+        $formatEducation = function ($edu) {
+            if (empty($edu) || !is_array($edu)) return "Not provided";
+            $formatted = [];
+            foreach ($edu as $item) {
+                $degree = $item['degree'] ?? 'Degree';
+                $institution = $item['institution'] ?? 'Institution';
+                $year = $item['year'] ?? '';
+                $formatted[] = "- {$degree}, {$institution} ({$year})";
+            }
+            return implode("\n", $formatted);
+        };
+
+        // Self-heal/lazy-parse resume if not already done
+        $resumeText = $user->parseResumeText();
+
+        $candidateProfile = "Name: " . ($user->full_name ?? 'Candidate') .
+            "\nSkills: " . $formatField($user->skills) .
+            "\nBio: " . $formatField($user->bio) .
+            "\n\nWork Experience:\n" . $formatExperience($user->work_experience) .
+            "\n\nEducation:\n" . $formatEducation($user->education);
+
+        if (!empty($resumeText)) {
+            $candidateProfile .= "\n\nExtracted Resume Text Content:\n" . $resumeText;
+        }
 
         $jobDescription   = "Title: "        . $job->title                      .
             "\nRequirements: " . $formatField($job->requirements) .
@@ -61,7 +116,9 @@ class AiMatchController  extends Controller
 
         $userName = $user->full_name ?? 'Candidate';
 
-        // 4. Prompt
+        // 4. Build system instruction and user prompt
+        $systemInstruction = 'You are a precise JSON API. You only ever respond with a single valid raw JSON object. Never use markdown code blocks. Never add explanations.';
+
         $prompt = <<<PROMPT
 You are a senior technical recruiter with 15+ years of experience hiring for top tech companies in India.
 Your analysis must be precise, data-driven, and actionable.
@@ -132,52 +189,43 @@ Your analysis must be precise, data-driven, and actionable.
 }
 PROMPT;
 
-        // 5. Groq API call
-        $apiKey = config('services.groq.key');
+        // 5. Route to correct AI provider based on user tier
+        // Check both the is_pro flag AND that the 30-day pass has not expired
+        $isPro = $user->is_pro
+            && $user->pro_expires_at !== null
+            && $user->pro_expires_at->isFuture();
 
+        if ($isPro) {
+            // ── PRO users: Gemini 2.5 Flash (premium quality) ──
+            $rawText = $this->callGemini($systemInstruction, $prompt);
 
-        $response = Http::withoutVerifying()
-            ->withHeaders(['Authorization' => 'Bearer ' . $apiKey])
-            ->timeout(60) // ✅ Increased — 70b model needs more time
-            ->post('https://api.groq.com/openai/v1/chat/completions', [
-                'model'           => $this->model,
-                'messages'        => [
-                    // ✅ Split into system + user roles for better instruction following
-                    [
-                        'role'    => 'system',
-                        'content' => 'You are a precise JSON API. You only ever respond with a single valid raw JSON object. Never use markdown code blocks. Never add explanations.'
-                    ],
-                    [
-                        'role'    => 'user',
-                        'content' => $prompt
-                    ]
-                ],
-                'response_format' => ['type' => 'json_object'],
-                'max_tokens'      => 4000, // ✅ Critical — was missing before
-                'temperature'     => 0.3,  // ✅ Lower = more consistent structured output
-            ]);
+            // If Gemini fails, fall back to Groq so PRO users are never blocked
+            if ($rawText === null) {
+                Log::warning('Gemini failed for PRO user, falling back to Groq', ['user_id' => $user->id]);
+                $rawText = $this->callGroq($systemInstruction, $prompt);
+            }
+        } else {
+            // ── Free users: Groq + Llama 3.3 70B (fast & cheap) ──
+            $rawText = $this->callGroq($systemInstruction, $prompt);
+        }
 
-        // 6. Handle API-level failure
-        if ($response->failed()) {
-            Log::error('Groq API Error', [
-                'status' => $response->status(),
-                'body'   => $response->body(),
-            ]);
+        // 6. Handle total AI failure
+        if ($rawText === null) {
             return response()->json([
                 'success' => false,
-                'message' => 'AI service error: ' . $response->status()
-            ], 500);
+                'message' => 'AI service is temporarily unavailable. Please try again in a moment.'
+            ], 503);
         }
 
         // 7. Parse and save
         try {
-            $rawText = $response->json('choices.0.message.content');
-
-            // Log the raw response for debugging during development
-            Log::info('Groq Raw Response', ['text' => $rawText]);
+            Log::info('AI Raw Response', [
+                'provider' => $isPro ? 'gemini' : 'groq',
+                'text'     => substr($rawText, 0, 500),
+            ]);
 
             if (empty($rawText)) {
-                throw new \Exception('Empty response from Groq API');
+                throw new \Exception('Empty response from AI API');
             }
 
             // Strip markdown fences if model ignores the json_object format
@@ -185,7 +233,7 @@ PROMPT;
 
             $aiData = json_decode($cleanText, true);
 
-            // ✅ Validate the decode worked and has the required field
+            // Validate the decode worked and has the required field
             if (json_last_error() !== JSON_ERROR_NONE) {
                 throw new \Exception('JSON decode failed: ' . json_last_error_msg() . ' | Raw: ' . substr($cleanText, 0, 500));
             }
@@ -194,7 +242,7 @@ PROMPT;
                 throw new \Exception('Missing required score field. Got keys: ' . implode(', ', array_keys($aiData ?? [])));
             }
 
-            // ✅ Ensure score matches breakdown sum (self-healing fallback)
+            // Ensure score matches breakdown sum (self-healing fallback)
             if (isset($aiData['score_breakdown'])) {
                 $breakdown = $aiData['score_breakdown'];
                 $computedScore = ($breakdown['technical_skills'] ?? 0)
@@ -208,7 +256,7 @@ PROMPT;
                 }
             }
 
-            // ✅ Helper to safely encode — handles both arrays and already-encoded strings
+            // Helper to safely encode — handles both arrays and already-encoded strings
             $safeJson = fn($val) => is_array($val) ? json_encode($val) : ($val ?? null);
 
             $match = JobMatch::create([
@@ -221,15 +269,26 @@ PROMPT;
                 'optimized_profile'   => $aiData['optimized_profile'] ?? null,
                 'interview_questions' => $safeJson($aiData['interview_questions'] ?? null),
                 'salary_benchmark'    => $safeJson($aiData['salary_benchmark']    ?? null),
+                'score_breakdown'     => $safeJson($aiData['score_breakdown']     ?? null),
             ]);
 
-            // Deduct credit for free users
-            if (!$user->is_pro) {
-                $user->decrement('ai_credits');
+            // Mark the first free analysis as used on successful AI completion
+            if (!$isPro && $isFirstFree) {
+                $user->is_first_analysis_free_used = true;
+                $user->save();
             }
 
-            return response()->json(['success' => true, 'data' => $match]);
+            return response()->json([
+                'success'     => true,
+                'data'        => $match,
+                'ai_provider' => $isPro ? 'premium' : 'standard',
+            ]);
         } catch (\Exception $e) {
+            // Refund credit if it was deducted upfront but AI match failed
+            if (isset($creditDeducted) && $creditDeducted) {
+                $user->increment('ai_credits');
+            }
+
             Log::error('AI Parsing Error', [
                 'error'    => $e->getMessage(),
                 'raw_text' => $rawText ?? 'not captured',
@@ -242,17 +301,132 @@ PROMPT;
         }
     }
 
+    /* ──────────────────────────────────────────────────────────────────
+     * GEMINI 2.5 FLASH — Premium AI for PRO users
+     * Uses Google's native Gemini REST API with JSON mode
+     * Returns raw text or null on failure
+     * ────────────────────────────────────────────────────────────── */
+    private function callGemini(string $systemInstruction, string $prompt): ?string
+    {
+        try {
+            $apiKey = config('services.gemini.key');
+
+            if (empty($apiKey)) {
+                Log::error('Gemini API key not configured');
+                return null;
+            }
+
+            $url = "https://generativelanguage.googleapis.com/v1beta/models/{$this->geminiModel}:generateContent?key={$apiKey}";
+
+            $response = Http::withoutVerifying()
+                ->timeout(90) // Gemini can take a bit longer but delivers higher quality
+                ->post($url, [
+                    'systemInstruction' => [
+                        'parts' => [['text' => $systemInstruction]]
+                    ],
+                    'contents' => [
+                        [
+                            'role'  => 'user',
+                            'parts' => [['text' => $prompt]]
+                        ]
+                    ],
+                    'generationConfig' => [
+                        'responseMimeType' => 'application/json', // Native JSON mode — more reliable than json_object
+                        'temperature'      => 0.3,
+                        'maxOutputTokens'  => 8192, // Higher limit for richer cover letters and feedback
+                    ],
+                ]);
+
+            if ($response->failed()) {
+                Log::error('Gemini API Error', [
+                    'status' => $response->status(),
+                    'body'   => substr($response->body(), 0, 1000),
+                ]);
+                return null;
+            }
+
+            $rawText = $response->json('candidates.0.content.parts.0.text');
+
+            if (empty($rawText)) {
+                Log::error('Gemini returned empty content', [
+                    'response' => substr($response->body(), 0, 500),
+                ]);
+                return null;
+            }
+
+            return $rawText;
+        } catch (\Exception $e) {
+            Log::error('Gemini Exception', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /* ──────────────────────────────────────────────────────────────────
+     * GROQ — Fast AI for Free users (also serves as PRO fallback)
+     * Uses OpenAI-compatible API via Groq's LPU hardware
+     * Returns raw text or null on failure
+     * ────────────────────────────────────────────────────────────── */
+    private function callGroq(string $systemInstruction, string $prompt): ?string
+    {
+        try {
+            $apiKey = config('services.groq.key');
+
+            if (empty($apiKey)) {
+                Log::error('Groq API key not configured');
+                return null;
+            }
+
+            $response = Http::withoutVerifying()
+                ->withHeaders(['Authorization' => 'Bearer ' . $apiKey])
+                ->timeout(60)
+                ->post('https://api.groq.com/openai/v1/chat/completions', [
+                    'model'           => $this->groqModel,
+                    'messages'        => [
+                        [
+                            'role'    => 'system',
+                            'content' => $systemInstruction
+                        ],
+                        [
+                            'role'    => 'user',
+                            'content' => $prompt
+                        ]
+                    ],
+                    'response_format' => ['type' => 'json_object'],
+                    'max_tokens'      => 4000,
+                    'temperature'     => 0.3,
+                ]);
+
+            if ($response->failed()) {
+                Log::error('Groq API Error', [
+                    'status' => $response->status(),
+                    'body'   => substr($response->body(), 0, 1000),
+                ]);
+                return null;
+            }
+
+            $rawText = $response->json('choices.0.message.content');
+
+            if (empty($rawText)) {
+                Log::error('Groq returned empty content');
+                return null;
+            }
+
+            return $rawText;
+        } catch (\Exception $e) {
+            Log::error('Groq Exception', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
     public function myMatches(Request $request)
     {
         $user = $request->user();
         
         $matches = JobMatch::with('job:id,title,role,location,image')
             ->where('user_id', $user->id)
-            ->orderBy('updated_at', 'desc') // Best to show recently updated/analyzed first
+            ->orderBy('updated_at', 'desc')
             ->get()
             ->map(function ($match) {
-                // Parse strings back to JSON if needed for frontend mapping, though Laravel 
-                // cast could do this. Since they are stored as JSON strings:
                 return [
                     'id' => $match->id,
                     'job' => $match->job,

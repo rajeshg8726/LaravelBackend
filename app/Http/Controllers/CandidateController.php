@@ -12,7 +12,10 @@ class CandidateController extends Controller
     public function profile(Request $request)
     {
         $user = $request->user();
-         
+        
+        // Lazy refresh and check for completion bonus dynamically on dashboard load
+        $user->refreshCreditsIfEligible();
+        $user->checkAndApplyProfileBonus();
 
         return response()->json([
             'success' => true,
@@ -24,12 +27,18 @@ class CandidateController extends Controller
                 'location'      => $user->location,
                 'bio'           => $user->bio,
                 'skills'        => $user->skills ?? [],   // stored as JSON, returned as array
+                'work_experience' => $user->work_experience ?? [],
+                'education'     => $user->education ?? [],
                 'profile_image' => $user->profile_image,
                 'is_pro'       => $user->is_pro,
                 'pro_expires_at' => $user->pro_expires_at,
                 'is_active'     => $user->is_active,
                 'resume'        => $user->resume,
                 'created_at'    => $user->created_at,
+                'ai_credits'    => $user->ai_credits,
+                'profile_completeness' => $user->profile_completeness,
+                'has_received_profile_bonus' => $user->has_received_profile_bonus,
+                'is_first_analysis_free_used' => $user->is_first_analysis_free_used,
             ],
         ]);
     }
@@ -44,6 +53,16 @@ class CandidateController extends Controller
             'bio'      => 'sometimes|nullable|string|max:1000',
             'skills'   => 'sometimes|nullable|array',
             'skills.*' => 'string|max:50',
+            'work_experience' => 'sometimes|nullable|array',
+            'work_experience.*.company' => 'required_with:work_experience|string|max:255',
+            'work_experience.*.role' => 'required_with:work_experience|string|max:255',
+            'work_experience.*.from_year' => 'required_with:work_experience|string|max:10',
+            'work_experience.*.to_year' => 'nullable|string|max:10',
+            'work_experience.*.is_current' => 'nullable|boolean',
+            'education' => 'sometimes|nullable|array',
+            'education.*.degree' => 'required_with:education|string|max:255',
+            'education.*.institution' => 'required_with:education|string|max:255',
+            'education.*.year' => 'required_with:education|string|max:10',
         ]);
 
         if ($validator->fails()) {
@@ -60,8 +79,10 @@ class CandidateController extends Controller
 
         // Refresh from DB to return latest data
         $user->refresh();
-            // Debugging line to check user data after update
-            // echo "After Update: " . json_encode($user) . "\n";
+        
+        // Also check/apply bonus when profile is updated
+        $user->checkAndApplyProfileBonus();
+
         return response()->json([
             'success' => true,
             'user'    => [
@@ -72,8 +93,15 @@ class CandidateController extends Controller
                 'location'      => $user->location,
                 'bio'           => $user->bio,
                 'skills'        => $user->skills ?? [],
+                'work_experience' => $user->work_experience ?? [],
+                'education'     => $user->education ?? [],
                 'profile_image' => $user->profile_image,
                 'resume'        => $user->resume,
+                'is_pro'        => $user->is_pro,
+                'ai_credits'    => $user->ai_credits,
+                'profile_completeness' => $user->profile_completeness,
+                'has_received_profile_bonus' => $user->has_received_profile_bonus,
+                'is_first_analysis_free_used' => $user->is_first_analysis_free_used,
             ],
         ]);
     }
@@ -116,11 +144,24 @@ class CandidateController extends Controller
         }
 
         $path = $request->file('resume')->store('resumes', 'public');
-        $user->update(['resume' => 'storage/' . $path]);
+        $user->update([
+            'resume' => 'storage/' . $path,
+            'resume_text' => null
+        ]);
+
+        // Parse and cache the resume text immediately
+        $user->parseResumeText();
+
+        $warning = null;
+        if (!empty($user->resume) && (empty($user->resume_text) || strlen($user->resume_text) < 150)) {
+            $warning = "Your resume PDF/document appears to be a scanned image or has very little readable text. For best AI matching results, please upload a text-based PDF or fill out your profile details fully.";
+        }
 
         return response()->json([
             'success' => true,
             'resume'  => 'storage/' . $path,
+            'resume_parsed' => !empty($user->resume_text),
+            'warning' => $warning,
         ]);
     }
 }

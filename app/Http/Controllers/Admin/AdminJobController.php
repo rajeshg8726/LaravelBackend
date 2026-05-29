@@ -11,24 +11,65 @@ use Illuminate\Support\Facades\Storage;
 class AdminJobController extends Controller
 {
     /** GET /api/admin/stats */
-   /** GET /api/admin/stats */
-public function stats()
-{
-    $weekStart = now()->startOfWeek();
+    public function stats()
+    {
+        $weekStart = now()->startOfWeek();
 
-    return response()->json([
-        'success' => true,
-        'stats'   => [
-            'totalJobs'       => Jobs::count(),
-            'totalCandidates' => User::where('is_employer', false)->count(), // ✅
-            'totalEmployers'  => User::where('is_employer', true)->count(),  // ✅
-            'jobsThisWeek'    => Jobs::where('created_at', '>=', $weekStart)->count(),
-        ],
-        'recentJobs' => Jobs::latest()
-            ->take(10)
-            ->get(['id', 'role', 'title', 'location', 'image', 'created_at']),
-    ]);
-}
+        // Calculate Revenue and transaction counts
+        $totalRevenue = \App\Models\Transaction::where('status', 'SUCCESS')->sum('amount');
+        $proRevenue = \App\Models\Transaction::where('status', 'SUCCESS')->where('plan_type', 'PRO')->sum('amount');
+        $topupRevenue = \App\Models\Transaction::where('status', 'SUCCESS')->where('plan_type', 'TOPUP')->sum('amount');
+        
+        $totalProPurchases = \App\Models\Transaction::where('status', 'SUCCESS')->where('plan_type', 'PRO')->count();
+        $totalTopupPurchases = \App\Models\Transaction::where('status', 'SUCCESS')->where('plan_type', 'TOPUP')->count();
+
+        $successfulTxCount = \App\Models\Transaction::where('status', 'SUCCESS')->count();
+        $failedTxCount = \App\Models\Transaction::where('status', 'FAILED')->count();
+        $pendingTxCount = \App\Models\Transaction::where('status', 'PENDING')->count();
+        
+        $totalTxCount = $successfulTxCount + $failedTxCount + $pendingTxCount;
+        $txConversionRate = $totalTxCount > 0 ? (int) round(($successfulTxCount / $totalTxCount) * 100) : 100;
+
+        return response()->json([
+            'success' => true,
+            'stats'   => [
+                'totalJobs'       => Jobs::count(),
+                'totalCandidates' => User::where('is_employer', false)->count(),
+                'totalEmployers'  => User::where('is_employer', true)->count(),
+                'jobsThisWeek'    => Jobs::where('created_at', '>=', $weekStart)->count(),
+                
+                // Add PRO & Top-Up Insights
+                'totalRevenue'    => $totalRevenue,
+                'proRevenue'      => $proRevenue,
+                'topupRevenue'    => $topupRevenue,
+                'totalPro'        => User::where('is_pro', true)->count(),
+                'totalProPurchases' => $totalProPurchases,
+                'totalTopupPurchases' => $totalTopupPurchases,
+                'txConversionRate' => $txConversionRate,
+                'successfulTx'    => $successfulTxCount,
+                'failedTx'        => $failedTxCount,
+            ],
+            'recentJobs' => Jobs::latest()
+                ->take(10)
+                ->get(['id', 'role', 'title', 'location', 'image', 'created_at']),
+            'recentTransactions' => \App\Models\Transaction::where('status', 'SUCCESS')
+                ->latest()
+                ->take(5)
+                ->get()
+                ->map(function ($tx) {
+                    $user = $tx->user;
+                    return [
+                        'id' => $tx->id,
+                        'user_name' => $user->full_name ?? 'Candidate',
+                        'user_email' => $user->email ?? '',
+                        'plan_type' => $tx->plan_type,
+                        'amount' => $tx->amount,
+                        'razorpay_payment_id' => $tx->razorpay_payment_id,
+                        'created_at' => $tx->created_at ? $tx->created_at->toIso8601String() : null
+                    ];
+                })
+        ]);
+    }
 
 
     /** GET /api/admin/jobs */
