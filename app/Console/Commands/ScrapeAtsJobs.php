@@ -167,17 +167,22 @@ class ScrapeAtsJobs extends Command
                 $title = strtolower($job['title']);
                 $location = $job['location']['name'] ?? 'Remote';
                 
-                // Early Career Filter
+                // Early Career Filter (Strict Title Match)
                 if (
-                    Str::contains($title, ['senior', 'staff', 'principal', 'director', 'lead', 'manager'])
+                    Str::contains($title, ['senior', 'sr', 'staff', 'principal', 'director', 'lead', 'manager', 'head', 'architect', 'expert'])
                 ) {
                     continue;
                 }
 
                 if (
-                    !Str::contains($title, ['intern', 'fresher', 'junior', 'graduate', 'associate', 'early']) 
+                    !Str::contains($title, ['intern', 'fresher', 'junior', 'jr', 'graduate', 'associate', 'early', 'entry']) 
                 ) {
                     continue; 
+                }
+
+                // India Location Filter
+                if (!$this->isLocationInIndia($location)) {
+                    continue;
                 }
 
                 // Technical/Software Roles Filter
@@ -207,6 +212,12 @@ class ScrapeAtsJobs extends Command
                 
                 $contentHtml = $detailRes->json('content') ?? '';
                 if (empty($contentHtml)) continue;
+
+                // Strict Experience Regex Filter
+                if ($this->requiresHighExperience($contentHtml)) {
+                    $this->line("   -> Skipped: Description indicates 4+ years experience.");
+                    continue;
+                }
 
                 $parsedFields = $parser->parseJobDescription($contentHtml);
 
@@ -275,11 +286,16 @@ class ScrapeAtsJobs extends Command
                 $location = $job['categories']['location'] ?? 'Remote';
                 
                 // Early Career Filter
-                if (Str::contains($title, ['senior', 'staff', 'principal', 'director', 'lead', 'manager'])) {
+                if (Str::contains($title, ['senior', 'sr', 'staff', 'principal', 'director', 'lead', 'manager', 'head', 'architect', 'expert'])) {
                     continue;
                 }
-                if (!Str::contains($title, ['intern', 'fresher', 'junior', 'graduate', 'associate', 'early'])) {
+                if (!Str::contains($title, ['intern', 'fresher', 'junior', 'jr', 'graduate', 'associate', 'early', 'entry'])) {
                     continue; 
+                }
+
+                // India Location Filter
+                if (!$this->isLocationInIndia($location)) {
+                    continue;
                 }
 
                 // Technical/Software Roles Filter
@@ -306,6 +322,12 @@ class ScrapeAtsJobs extends Command
                 }
 
                 if (empty($contentHtml)) continue;
+
+                // Strict Experience Regex Filter
+                if ($this->requiresHighExperience($contentHtml)) {
+                    $this->line("   -> Skipped: Description indicates 4+ years experience.");
+                    continue;
+                }
 
                 $parsedFields = $parser->parseJobDescription($contentHtml);
 
@@ -354,19 +376,61 @@ class ScrapeAtsJobs extends Command
         $title = strtolower($title);
 
         // 1. Exclude Senior / Manager / Lead / Director roles
-        if (preg_match('/\b(senior|staff|principal|director|lead|manager|head|vp|president|expert)\b/i', $title)) {
+        if (preg_match('/\b(senior|sr|staff|principal|director|lead|manager|head|vp|president|expert|architect)\b/i', $title)) {
             return false;
         }
 
-        // 2. Exclude Non-technical & Technical Support roles (Blacklist)
-        $blacklistRegex = '/\b(support|helpdesk|help desk|customer|sales|marketing|hr|human resources|recruiter|recruiting|talent|operations|ops|designer|design|finance|accounting|accountant|legal|writer|content|admin|administrator|coordinator|executive|assistant|business analyst|product manager|product owner|consultant|strategist)\b/i';
+        // 2. Exclude Non-technical roles (Blacklist - EXPANDED)
+        $blacklistRegex = '/\b(support|helpdesk|help desk|customer|sales|marketing|hr|human resources|recruiter|recruiting|talent|operations|ops|designer|design|finance|accounting|accountant|legal|writer|content|admin|administrator|coordinator|executive|assistant|business analyst|product manager|product owner|consultant|strategist|compliance|media|copywriter|editor|purchasing|buyer|logistics|supply chain|growth)\b/i';
         if (preg_match($blacklistRegex, $title)) {
             return false;
         }
 
-        // 3. Include only Technical / Software role keywords (Whitelist)
-        $whitelistRegex = '/\b(software|developer|engineer|programmer|coder|frontend|backend|fullstack|full-stack|devops|cloud|qa|test|testing|data|analyst|analytics|machine learning|ml|ai|artificial intelligence|systems|network|security|cybersecurity|database|db|infrastructure|mobile|android|ios|sre|architect|tech)\b/i';
+        // 3. Include only Technical / Software role keywords (Whitelist - STRICT)
+        $whitelistRegex = '/\b(software|developer|engineer|sde|programmer|coder|frontend|backend|fullstack|full-stack|devops|cloud|qa|test|testing|sdet|data|analytics|machine learning|ml|ai|artificial intelligence|systems|network|security|cybersecurity|database|db|infrastructure|mobile|android|ios|sre)\b/i';
         if (preg_match($whitelistRegex, $title)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function isLocationInIndia(string $location): bool
+    {
+        $location = strtolower($location);
+        
+        $indiaKeywords = [
+            'india', 'bangalore', 'bengaluru', 'hyderabad', 'pune', 'mumbai', 
+            'delhi', 'new delhi', 'noida', 'gurugram', 'gurgaon', 'chennai', 
+            'kolkata', 'ahmedabad', 'thiruvananthapuram', 'trivandrum', 'kochi',
+            'indore', 'chandigarh', 'jaipur'
+        ];
+
+        foreach ($indiaKeywords as $keyword) {
+            if (str_contains($location, $keyword)) {
+                return true;
+            }
+        }
+        
+        // Special case: if it explicitly says Remote India
+        if (str_contains($location, 'remote') && str_contains($location, 'india')) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function requiresHighExperience(string $contentHtml): bool
+    {
+        $text = strtolower(strip_tags($contentHtml));
+
+        // Match "X years of experience" where X >= 4
+        $pattern1 = '/\b([4-9]|[1-9]\d{1,2})\+?\s*(?:-|to)?\s*(?:\d+)?\s*(?:years?|yrs?)\s+(?:of\s+)?experience\b/i';
+        
+        // Match "Experience: X+ years" where X >= 4
+        $pattern2 = '/\bexperience[\s:]*(?:of\s*)?([4-9]|[1-9]\d{1,2})\+?\s*(?:-|to)?\s*(?:\d+)?\s*(?:years?|yrs?)\b/i';
+
+        if (preg_match($pattern1, $text) || preg_match($pattern2, $text)) {
             return true;
         }
 
