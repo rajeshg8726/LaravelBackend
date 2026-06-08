@@ -32,6 +32,20 @@ public function boot(): void
             . '/reset-password?token=' . $token
             . '&email=' . urlencode($user->email);
     });
+
+    // Custom design for password reset emails (premium Obsidian theme, zero Laravel branding)
+    ResetPassword::toMailUsing(function ($notifiable, string $token) {
+        $url = env('FRONTEND_URL', 'http://localhost:3000')
+            . '/reset-password?token=' . $token
+            . '&email=' . urlencode($notifiable->email);
+
+        return (new \Illuminate\Notifications\Messages\MailMessage)
+            ->subject('Reset Your Password | RGJobs')
+            ->view('emails.reset-password', [
+                'url' => $url,
+                'name' => $notifiable->full_name ?? 'there',
+            ]);
+    });
 }
 
 }

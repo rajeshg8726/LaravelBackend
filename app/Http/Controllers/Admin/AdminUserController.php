@@ -20,19 +20,20 @@ public function index(Request $request)
 
     if ($s = $request->search) {
         $query->where(function ($q) use ($s) {
-            $q->where('fullName', 'like', "%{$s}%")
+            $q->where('full_name', 'like', "%{$s}%")
               ->orWhere('email',  'like', "%{$s}%");
         });
     }
 
     $paginated = $query->latest()->paginate($perPage);
+    $paginated->getCollection()->makeHidden(['resume_text', 'skills', 'work_experience', 'education']);
 
     return response()->json([
         'success'    => true,
         'users'      => $paginated->items(),
         'total'      => $paginated->total(),
         'totalPages' => $paginated->lastPage(),
-    ]);
+    ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
 }
 
 
@@ -41,7 +42,28 @@ public function index(Request $request)
     {
         $user = User::findOrFail($id);
         $user->update(['is_active' => !$user->is_active]);
-        return response()->json(['success' => true, 'user' => $user->fresh()]);
+        return response()->json(['success' => true, 'user' => $user->fresh()], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
+    }
+
+    /** PUT /api/admin/users/{id}/revoke-pro */
+    public function revokePro($id)
+    {
+        $user = User::findOrFail($id);
+        
+        if (!$user->is_pro) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User does not have an active Pro plan.'
+            ], 400);
+        }
+
+        $user->update(['is_pro' => false]);
+        
+        return response()->json([
+            'success' => true, 
+            'message' => 'Pro plan revoked successfully without initiating an automatic refund.',
+            'user' => $user->fresh()
+        ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
     }
 
     /** GET /api/admin/pro-subscribers */
@@ -58,13 +80,14 @@ public function index(Request $request)
         }
 
         $paginated = $query->latest()->paginate($perPage);
+        $paginated->getCollection()->makeHidden(['resume_text', 'skills', 'work_experience', 'education']);
 
         return response()->json([
             'success' => true,
             'users' => $paginated->items(),
             'total' => $paginated->total(),
             'totalPages' => $paginated->lastPage()
-        ]);
+        ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
     }
 
     /** GET /api/admin/ai-usage */
@@ -98,7 +121,7 @@ public function index(Request $request)
             'logs' => $paginated->items(),
             'total' => $paginated->total(),
             'totalPages' => $paginated->lastPage()
-        ]);
+        ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
     }
 
     /** GET /api/admin/transactions */
@@ -134,6 +157,85 @@ public function index(Request $request)
             'transactions' => $paginated->items(),
             'total' => $paginated->total(),
             'totalPages' => $paginated->lastPage()
-        ]);
+        ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
+    }
+
+    /** GET /api/admin/logs */
+    public function getLogs(Request $request)
+    {
+        $logPath = storage_path('logs/laravel.log');
+        if (!file_exists($logPath)) {
+            return response()->json([
+                'success' => true,
+                'logs' => [],
+                'message' => 'Log file does not exist.'
+            ]);
+        }
+
+        $logs = [];
+        $file = fopen($logPath, 'r');
+        if (!$file) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to open log file.'
+            ], 500);
+        }
+        
+        $rawLines = [];
+        $maxLines = 1500;
+        while (($line = fgets($file)) !== false) {
+            $rawLines[] = $line;
+            if (count($rawLines) > $maxLines) {
+                array_shift($rawLines);
+            }
+        }
+        fclose($file);
+
+        $currentEntry = null;
+        foreach ($rawLines as $line) {
+            if (preg_match('/^\[(?<date>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (?<env>\w+)\.(?<level>\w+): (?<message>.*)/', $line, $matches)) {
+                if ($currentEntry) {
+                    $logs[] = $currentEntry;
+                }
+                
+                $currentEntry = [
+                    'date' => $matches['date'],
+                    'env' => $matches['env'],
+                    'level' => strtoupper($matches['level']),
+                    'message' => trim($matches['message']),
+                    'stack_trace' => []
+                ];
+            } else {
+                if ($currentEntry && count($currentEntry['stack_trace']) < 60) {
+                    $currentEntry['stack_trace'][] = trim($line);
+                }
+            }
+        }
+        
+        if ($currentEntry) {
+            $logs[] = $currentEntry;
+        }
+
+        $logs = array_reverse($logs);
+        $logs = array_slice($logs, 0, 150);
+
+        return response()->json([
+            'success' => true,
+            'logs' => $logs
+        ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
+    }
+
+    /** DELETE /api/admin/logs/clear */
+    public function clearLogs(Request $request)
+    {
+        $logPath = storage_path('logs/laravel.log');
+        if (file_exists($logPath)) {
+            file_put_contents($logPath, '');
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Logs cleared successfully.'
+        ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
     }
 }

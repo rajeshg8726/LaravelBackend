@@ -314,7 +314,7 @@ class PaymentController extends Controller
                             <table border="0" cellpadding="0" cellspacing="0" width="100%">
                                 <tr>
                                     <td align="center">
-                                        <a href="http://localhost:3000/candidate-dashboard" style="display: inline-block; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: #ffffff; font-size: 16px; font-weight: 700; text-decoration: none; padding: 14px 32px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2), 0 2px 4px -1px rgba(79, 70, 229, 0.1); transition: all 0.2s ease; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+                                        <a href="https://www.rgjobs.in/login" style="display: inline-block; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: #ffffff; font-size: 16px; font-weight: 700; text-decoration: none; padding: 14px 32px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2), 0 2px 4px -1px rgba(79, 70, 229, 0.1); transition: all 0.2s ease; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
                                             Go to Dashboard &amp; Start Matching 🚀
                                         </a>
                                     </td>
@@ -326,7 +326,7 @@ class PaymentController extends Controller
                     <tr>
                         <td align="center" style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 30px; text-align: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
                             <p style="font-size: 13px; color: #64748b; margin: 0 0 8px 0;">Thank you for trusting RGJobs with your career journey.</p>
-                            <p style="font-size: 12px; color: #94a3b8; margin: 0;">RGJobs Inc., D-12, Sector 63, Noida, UP, India</p>
+                            <p style="font-size: 12px; color: #94a3b8; margin: 0;">RGJobs Inc., Girik Studio, Sultanpur-Lucknow Road, Lucknow, UP, India</p>
                         </td>
                     </tr>
                 </table>
@@ -345,4 +345,6 @@ HTML;
             Log::error('Failed to send transactional receipt email: ' . $e->getMessage());
         }
     }
-}
+
+
+    }

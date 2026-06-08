@@ -33,10 +33,10 @@ class AdminJobController extends Controller
         return response()->json([
             'success' => true,
             'stats'   => [
-                'totalJobs'       => Jobs::count(),
+                'totalJobs'       => Jobs::withoutGlobalScope('published')->count(),
                 'totalCandidates' => User::where('is_employer', false)->count(),
                 'totalEmployers'  => User::where('is_employer', true)->count(),
-                'jobsThisWeek'    => Jobs::where('created_at', '>=', $weekStart)->count(),
+                'jobsThisWeek'    => Jobs::withoutGlobalScope('published')->where('created_at', '>=', $weekStart)->count(),
                 
                 // Add PRO & Top-Up Insights
                 'totalRevenue'    => $totalRevenue,
@@ -49,7 +49,7 @@ class AdminJobController extends Controller
                 'successfulTx'    => $successfulTxCount,
                 'failedTx'        => $failedTxCount,
             ],
-            'recentJobs' => Jobs::latest()
+            'recentJobs' => Jobs::withoutGlobalScope('published')->latest()
                 ->take(10)
                 ->get(['id', 'role', 'title', 'location', 'image', 'created_at']),
             'recentTransactions' => \App\Models\Transaction::where('status', 'SUCCESS')
@@ -76,7 +76,11 @@ class AdminJobController extends Controller
     public function index(Request $request)
     {
         $perPage = 15;
-        $query   = Jobs::query();
+        $query   = Jobs::withoutGlobalScope('published');
+
+        if ($request->status) {
+            $query->where('status', $request->status);
+        }
 
         if ($s = $request->search) {
             $query->where(function ($q) use ($s) {
@@ -89,6 +93,8 @@ class AdminJobController extends Controller
             $query->where('is_featured', true);
         } elseif ($request->filter === 'urgent') {
             $query->where('is_urgent', true);
+        } elseif ($request->filter === 'old') {
+            $query->where('created_at', '<', now()->subDays(30));
         }
 
         $paginated = $query->latest()->paginate($perPage);
@@ -104,14 +110,14 @@ class AdminJobController extends Controller
     /** GET /api/admin/jobs/{id} */
     public function show($id)
     {
-        $job = Jobs::findOrFail($id);
+        $job = Jobs::withoutGlobalScope('published')->findOrFail($id);
         return response()->json(['success' => true, 'job' => $job]);
     }
 
     /** PUT /api/admin/jobs/{id} */
     public function update(Request $request, $id)
     {
-        $job = Jobs::findOrFail($id);
+        $job = Jobs::withoutGlobalScope('published')->findOrFail($id);
 
         $validated = $request->validate([
             'title'                   => 'sometimes|string',
@@ -145,7 +151,7 @@ class AdminJobController extends Controller
     /** PUT /api/admin/jobs/{id}/toggle-featured */
     public function toggleFeatured($id)
     {
-        $job = Jobs::findOrFail($id);
+        $job = Jobs::withoutGlobalScope('published')->findOrFail($id);
         $job->update(['is_featured' => !$job->is_featured]);
         return response()->json(['success' => true, 'job' => $job->fresh()]);
     }
@@ -153,7 +159,7 @@ class AdminJobController extends Controller
     /** PUT /api/admin/jobs/{id}/toggle-urgent */
     public function toggleUrgent($id)
     {
-        $job = Jobs::findOrFail($id);
+        $job = Jobs::withoutGlobalScope('published')->findOrFail($id);
         $job->update(['is_urgent' => !$job->is_urgent]);
         return response()->json(['success' => true, 'job' => $job->fresh()]);
     }
@@ -161,7 +167,7 @@ class AdminJobController extends Controller
     /** DELETE /api/admin/jobs/{id} */
     public function destroy($id)
     {
-        $job = Jobs::findOrFail($id);
+        $job = Jobs::withoutGlobalScope('published')->findOrFail($id);
 
         // Delete company logo from storage
         if ($job->image && Storage::disk('public')->exists($job->image)) {
@@ -179,7 +185,7 @@ class AdminJobController extends Controller
             'companyLogo' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
         ]);
 
-        $job = Jobs::findOrFail($id);
+        $job = Jobs::withoutGlobalScope('published')->findOrFail($id);
 
         // Delete old logo
         if ($job->image && Storage::disk('public')->exists($job->image)) {
@@ -192,5 +198,13 @@ class AdminJobController extends Controller
         $job->update(['image' => 'storage/' . $path]);
 
         return response()->json(['success' => true, 'image' => 'storage/' . $path]);
+    }
+
+    /** PUT /api/admin/jobs/{id}/publish */
+    public function publish($id)
+    {
+        $job = Jobs::withoutGlobalScope('published')->findOrFail($id);
+        $job->update(['status' => 'published']);
+        return response()->json(['success' => true, 'message' => 'Job published successfully.', 'job' => $job->fresh()]);
     }
 }

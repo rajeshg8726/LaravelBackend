@@ -418,6 +418,315 @@ PROMPT;
         }
     }
 
+    /* ──────────────────────────────────────────────────────────────────
+     * RESUME HEALTH SCORE — Standalone ATS Readiness Analysis
+     * No job description required. Scores resume across 6 dimensions.
+     * Uses same AI routing: Gemini for PRO, Groq for Free.
+     * ────────────────────────────────────────────────────────────── */
+    public function resumeHealth(Request $request)
+    {
+        $user = $request->user();
+
+        // 1. Ensure resume exists
+        $resumeText = $user->parseResumeText();
+
+        if (empty($resumeText) || strlen($resumeText) < 50) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No resume found or resume has too little readable text. Please upload a text-based PDF resume in your profile settings first.',
+            ], 422);
+        }
+
+        // 2. Credit check (same logic as generateMatch)
+        $isActivePro = $user->is_pro
+            && $user->pro_expires_at !== null
+            && $user->pro_expires_at->isFuture();
+
+        $isFirstFree = !$user->is_first_resume_health_free_used;
+        $creditDeducted = false;
+
+        if (!$isActivePro) {
+            if (!$isFirstFree) {
+                if ($user->ai_credits <= 0) {
+                    return response()->json([
+                        'success'          => false,
+                        'message'          => 'Out of credits',
+                        'requires_upgrade' => true,
+                    ], 402);
+                }
+                $user->decrement('ai_credits');
+                $creditDeducted = true;
+            }
+        }
+
+        // 3. Build candidate profile context
+        $formatField = function ($field) {
+            if (is_array($field)) return implode(', ', $field);
+            return $field ?? 'Not provided';
+        };
+
+        $formatExperience = function ($exp) {
+            if (empty($exp) || !is_array($exp)) return "Not provided";
+            $formatted = [];
+            foreach ($exp as $item) {
+                $role = $item['role'] ?? 'Role';
+                $company = $item['company'] ?? 'Company';
+                $from = $item['from_year'] ?? '';
+                $to = !empty($item['is_current']) ? 'Present' : ($item['to_year'] ?? 'N/A');
+                $formatted[] = "- {$role} at {$company} ({$from} – {$to})";
+            }
+            return implode("\n", $formatted);
+        };
+
+        $formatEducation = function ($edu) {
+            if (empty($edu) || !is_array($edu)) return "Not provided";
+            $formatted = [];
+            foreach ($edu as $item) {
+                $degree = $item['degree'] ?? 'Degree';
+                $institution = $item['institution'] ?? 'Institution';
+                $year = $item['year'] ?? '';
+                $formatted[] = "- {$degree}, {$institution} ({$year})";
+            }
+            return implode("\n", $formatted);
+        };
+
+        $profileContext = "Name: " . ($user->full_name ?? 'Candidate') .
+            "\nEmail: " . ($user->email ?? 'Not provided') .
+            "\nPhone: " . ($user->phone ?? 'Not provided') .
+            "\nLocation: " . ($user->location ?? 'Not provided') .
+            "\nSkills: " . $formatField($user->skills) .
+            "\nBio: " . $formatField($user->bio) .
+            "\n\nWork Experience:\n" . $formatExperience($user->work_experience) .
+            "\n\nEducation:\n" . $formatEducation($user->education) .
+            "\n\nFull Resume Text:\n" . $resumeText;
+
+        // 4. Build the Resume Health prompt
+        $systemInstruction = 'You are a precise JSON API. You only ever respond with a single valid raw JSON object. Never use markdown code blocks. Never add explanations.';
+
+        $prompt = <<<PROMPT
+You are a senior ATS (Applicant Tracking System) specialist and resume reviewer with 15+ years of experience.
+You have deep knowledge of how automated resume scanners work at companies like Amazon, Google, Infosys, TCS, Razorpay, Flipkart, and other Indian and global tech companies.
+
+Your task: Analyze this candidate's resume for ATS readiness — independent of any specific job description.
+Rate it honestly. Do not be generous. A bad resume should score low. A good resume should score high.
+Be specific in your feedback — mention actual words, sections, and patterns from the resume.
+
+## CANDIDATE PROFILE + RESUME
+<resume>
+{$profileContext}
+</resume>
+
+## SCORING DIMENSIONS (each out of 10, total = sum of all 6)
+
+### 1. ATS Parseability (0-10)
+Can standard ATS software (Workday, Greenhouse, Lever, iCIMS, Taleo) parse this resume correctly?
+Check for:
+- Is it a text-based PDF (not a scanned image)?
+- Does it avoid complex tables, columns, headers/footers, text boxes, graphics that break parsing?
+- Are section headings standard and recognizable (e.g., "Experience", "Education", "Skills")?
+- Does it use standard fonts and formatting?
+Score 8-10 if cleanly parseable. Score 0-3 if it would break most parsers.
+
+### 2. Contact Information (0-10)
+- Is full name clearly visible at the top?
+- Is a professional email address present?
+- Is a phone number present?
+- Is LinkedIn URL or portfolio/GitHub link present?
+- Is location (city, state) mentioned?
+Score 10 if all are present. Deduct 2 for each missing critical item.
+
+### 3. Section Structure (0-10)
+Does the resume have clearly labeled, ATS-recognizable sections?
+Required: Summary/Objective, Work Experience, Education, Skills
+Bonus: Projects, Certifications, Awards
+Score 8-10 if all required sections exist with clear headings. Score low if sections are missing or ambiguously labeled.
+
+### 4. Technical Keyword Density (0-10)
+- Does the resume contain enough technical/role-specific keywords?
+- Are skills mentioned in context (within experience descriptions), not just listed?
+- Would ATS keyword-matching algorithms find relevant terms?
+- Are both acronyms and full forms used (e.g., "Machine Learning (ML)")?
+Score 8-10 if keyword-rich and contextual. Score low if skills are vague or absent.
+
+### 5. Measurable Achievements (0-10)
+- Does the resume include quantifiable results (numbers, percentages, metrics)?
+- Examples: "Improved API response time by 40%", "Managed team of 8", "Reduced costs by 30%"
+- Action verbs (Led, Built, Designed, Optimized, Automated) at the start of bullet points?
+Score 8-10 if multiple achievements with metrics. Score 0-3 if all bullets are task descriptions with no impact.
+
+### 6. Length & Formatting (0-10)
+- Is the resume 1-2 pages (not too short, not too long)?
+- Consistent formatting (fonts, bullet styles, date formats)?
+- Clean whitespace and readability?
+- No spelling or grammar errors visible?
+- Professional tone throughout?
+Score 8-10 if clean and professional. Score low if messy, too long, or inconsistent.
+
+## STRICT OUTPUT RULES
+1. Return ONLY a single raw JSON object — no markdown, no explanation, no text before or after.
+2. All string values must use escaped newlines (\\n) not actual line breaks.
+3. "overall_score" MUST equal the exact sum of all 6 dimension scores (check your arithmetic).
+4. Each dimension score must be between 0 and 10 (integers only).
+5. "status" must be exactly "good" (score >= 7), "warning" (score 4-6), or "poor" (score <= 3).
+6. "top_fixes" must have exactly 5 items, ordered from highest impact to lowest.
+7. Each feedback string must reference specific content from the actual resume — never be generic.
+
+## OUTPUT JSON STRUCTURE
+{
+  "overall_score": 0,
+  "dimensions": {
+    "ats_parseability": {
+      "score": 0,
+      "max": 10,
+      "status": "good|warning|poor",
+      "feedback": "2-3 sentences explaining exactly what's right or wrong with parseability in THIS specific resume. Reference actual patterns observed."
+    },
+    "contact_info": {
+      "score": 0,
+      "max": 10,
+      "status": "good|warning|poor",
+      "feedback": "2-3 sentences. Name what's present and what's missing specifically."
+    },
+    "section_structure": {
+      "score": 0,
+      "max": 10,
+      "status": "good|warning|poor",
+      "feedback": "2-3 sentences. Name the sections found and which critical ones are missing."
+    },
+    "keyword_density": {
+      "score": 0,
+      "max": 10,
+      "status": "good|warning|poor",
+      "feedback": "2-3 sentences. Mention specific keywords found and suggest 3-5 keywords that should be added based on their skills and experience."
+    },
+    "achievements": {
+      "score": 0,
+      "max": 10,
+      "status": "good|warning|poor",
+      "feedback": "2-3 sentences. Quote any metrics found or explain why the bullets feel weak. Give 1-2 specific examples of how to rewrite a bullet with metrics."
+    },
+    "formatting": {
+      "score": 0,
+      "max": 10,
+      "status": "good|warning|poor",
+      "feedback": "2-3 sentences about length, consistency, and professional tone."
+    }
+  },
+  "top_fixes": [
+    "Most impactful fix with specific action to take",
+    "Second most impactful fix",
+    "Third fix",
+    "Fourth fix",
+    "Fifth fix"
+  ],
+  "summary": "3-4 sentence executive summary: what this resume does well, what's holding it back, and the single most important thing to fix right now."
+}
+PROMPT;
+
+        // 5. Route to AI provider
+        $isPro = $user->is_pro
+            && $user->pro_expires_at !== null
+            && $user->pro_expires_at->isFuture();
+
+        if ($isPro) {
+            $rawText = $this->callGemini($systemInstruction, $prompt);
+            if ($rawText === null) {
+                Log::warning('Gemini failed for resume-health PRO user, falling back to Groq', ['user_id' => $user->id]);
+                $rawText = $this->callGroq($systemInstruction, $prompt);
+            }
+        } else {
+            $rawText = $this->callGroq($systemInstruction, $prompt);
+        }
+
+        // 6. Handle total AI failure
+        if ($rawText === null) {
+            // Refund credit
+            if ($creditDeducted) {
+                $user->increment('ai_credits');
+            }
+            return response()->json([
+                'success' => false,
+                'message' => 'AI service is temporarily unavailable. Please try again in a moment.',
+            ], 503);
+        }
+
+        // 7. Parse response
+        try {
+            Log::info('Resume Health Raw Response', [
+                'provider' => $isPro ? 'gemini' : 'groq',
+                'text'     => substr($rawText, 0, 500),
+            ]);
+
+            if (empty($rawText)) {
+                throw new \Exception('Empty response from AI API');
+            }
+
+            $cleanText = trim(preg_replace('/^```json|^```|```$/m', '', $rawText));
+            $aiData = json_decode($cleanText, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new \Exception('JSON decode failed: ' . json_last_error_msg());
+            }
+
+            if (!isset($aiData['overall_score']) || !isset($aiData['dimensions'])) {
+                throw new \Exception('Missing required fields. Got keys: ' . implode(', ', array_keys($aiData ?? [])));
+            }
+
+            // Self-heal: recalculate overall_score from dimensions
+            $dims = $aiData['dimensions'];
+            $computedScore = 0;
+            foreach ($dims as $key => $dim) {
+                $s = (int) ($dim['score'] ?? 0);
+                $computedScore += $s;
+
+                // Auto-fix status if model got it wrong
+                if ($s >= 7) {
+                    $aiData['dimensions'][$key]['status'] = 'good';
+                } elseif ($s >= 4) {
+                    $aiData['dimensions'][$key]['status'] = 'warning';
+                } else {
+                    $aiData['dimensions'][$key]['status'] = 'poor';
+                }
+
+                // Ensure max is always 10
+                $aiData['dimensions'][$key]['max'] = 10;
+            }
+
+            // Fix arithmetic if model made errors
+            if (abs(($aiData['overall_score'] ?? 0) - $computedScore) > 2) {
+                $aiData['overall_score'] = $computedScore;
+            }
+
+            // Mark first free analysis as used
+            if (!$isActivePro && $isFirstFree) {
+                $user->is_first_resume_health_free_used = true;
+                $user->save();
+            }
+
+            return response()->json([
+                'success'     => true,
+                'data'        => $aiData,
+                'ai_provider' => $isPro ? 'premium' : 'standard',
+            ]);
+        } catch (\Exception $e) {
+            // Refund credit on parse failure
+            if ($creditDeducted) {
+                $user->increment('ai_credits');
+            }
+
+            Log::error('Resume Health Parse Error', [
+                'error'    => $e->getMessage(),
+                'raw_text' => $rawText ?? 'not captured',
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to analyze resume. Please try again.',
+                'debug'   => app()->environment('local') ? $e->getMessage() : null,
+            ], 500);
+        }
+    }
+
     public function myMatches(Request $request)
     {
         $user = $request->user();

@@ -10,6 +10,7 @@ use App\Http\Controllers\CandidateController;
 use App\Http\Controllers\Categories;
 use App\Http\Controllers\ClientController;
 use App\Http\Controllers\SitemapController;
+use App\Http\Controllers\TrackerController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\PaymentController;
@@ -49,11 +50,21 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/candidate/profile/image', [CandidateController::class, 'updateProfileImage']);
     Route::post('/candidate/profile/resume', [CandidateController::class, 'updateResume']);
 
+    // Saved Jobs Routes
+    Route::get('/candidate/saved-jobs', [CandidateController::class, 'getSavedJobs']);
+    Route::post('/candidate/jobs/{id}/save', [CandidateController::class, 'saveJob']);
+    Route::delete('/candidate/jobs/{id}/save', [CandidateController::class, 'unsaveJob']);
+
 
 
     // AI Match Route 
     Route::post('/candidate/generate-match', [AiMatchController::class, 'generateMatch']);
     Route::get('/candidate/my-ai-matches', [AiMatchController::class, 'myMatches']);
+    Route::post('/candidate/resume-health', [AiMatchController::class, 'resumeHealth']);
+
+    // Application Tracker Routes
+    Route::apiResource('tracker', TrackerController::class);
+    Route::get('tracker/{id}/ai-insights', [TrackerController::class, 'getAiInsights']);
 
     Route::post('/payments/create-order', [PaymentController::class, 'createOrder']);
     Route::post('/payments/verify', [PaymentController::class, 'verifyPayment']);
@@ -192,6 +203,7 @@ Route::prefix('admin')->group(function () {
         Route::get('/jobs',                    [AdminJobController::class, 'index']);
         Route::get('/jobs/{id}',               [AdminJobController::class, 'show']);
         Route::put('/jobs/{id}',               [AdminJobController::class, 'update']);
+        Route::put('/jobs/{id}/publish',       [AdminJobController::class, 'publish']);
         Route::put('/jobs/{id}/toggle-featured',[AdminJobController::class, 'toggleFeatured']);
         Route::put('/jobs/{id}/toggle-urgent', [AdminJobController::class, 'toggleUrgent']);
         Route::delete('/jobs/{id}',            [AdminJobController::class, 'destroy']);
@@ -199,8 +211,11 @@ Route::prefix('admin')->group(function () {
         // Users
         Route::get('/users',                        [AdminUserController::class, 'index']);
         Route::put('/users/{id}/toggle-status',     [AdminUserController::class, 'toggleStatus']);
+        Route::put('/users/{id}/revoke-pro',        [AdminUserController::class, 'revokePro']);
         Route::get('/pro-subscribers',              [AdminUserController::class, 'proSubscribers']);
         Route::get('/ai-usage',                     [AdminUserController::class, 'aiUsage']);
         Route::get('/transactions',                 [AdminUserController::class, 'transactions']);
+        Route::get('/logs',                         [AdminUserController::class, 'getLogs']);
+        Route::delete('/logs/clear',                [AdminUserController::class, 'clearLogs']);
     });
 });

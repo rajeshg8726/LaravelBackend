@@ -34,5 +34,18 @@ class Jobs extends Model
         'image',
         'is_featured', 
         'is_urgent',
+        'status',
     ];
+
+    /**
+     * The "booted" method of the model.
+     *
+     * @return void
+     */
+    protected static function booted()
+    {
+        static::addGlobalScope('published', function (\Illuminate\Database\Eloquent\Builder $builder) {
+            $builder->where('status', 'published');
+        });
+    }
 }

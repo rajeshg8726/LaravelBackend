@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use App\Models\Jobs;
 
 class CandidateController extends Controller
 {
@@ -39,6 +40,7 @@ class CandidateController extends Controller
                 'profile_completeness' => $user->profile_completeness,
                 'has_received_profile_bonus' => $user->has_received_profile_bonus,
                 'is_first_analysis_free_used' => $user->is_first_analysis_free_used,
+                'is_first_resume_health_free_used' => $user->is_first_resume_health_free_used,
             ],
         ]);
     }
@@ -102,6 +104,7 @@ class CandidateController extends Controller
                 'profile_completeness' => $user->profile_completeness,
                 'has_received_profile_bonus' => $user->has_received_profile_bonus,
                 'is_first_analysis_free_used' => $user->is_first_analysis_free_used,
+                'is_first_resume_health_free_used' => $user->is_first_resume_health_free_used,
             ],
         ]);
     }
@@ -163,5 +166,63 @@ class CandidateController extends Controller
             'resume_parsed' => !empty($user->resume_text),
             'warning' => $warning,
         ]);
+    }
+
+    /** GET /api/candidate/saved-jobs */
+    public function getSavedJobs(Request $request)
+    {
+        $user = $request->user();
+        $savedJobs = $user->savedJobs()->latest()->get()->map(function($job) {
+            return [
+                'id' => $job->id,
+                'role' => $job->role,
+                'title' => $job->title,
+                'location' => $job->location,
+                'pay' => $job->pay,
+                'image' => $job->image,
+                'created_at' => $job->created_at,
+                'slug' => $job->title ? strtolower(preg_replace('/[^a-z0-9]+/i', '-', trim($job->title))) : (string)$job->id,
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'saved_job_ids' => $savedJobs->pluck('id')->toArray(),
+            'saved_jobs' => $savedJobs
+        ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
+    }
+
+    /** POST /api/candidate/jobs/{id}/save */
+    public function saveJob(Request $request, $id)
+    {
+        $user = $request->user();
+        $job = Jobs::find($id);
+
+        if (!$job) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Job not found.'
+            ], 404);
+        }
+
+        $user->savedJobs()->syncWithoutDetaching([$id]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Job saved successfully.'
+        ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
+    }
+
+    /** DELETE /api/candidate/jobs/{id}/save */
+    public function unsaveJob(Request $request, $id)
+    {
+        $user = $request->user();
+        
+        $user->savedJobs()->detach($id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Job removed from saved.'
+        ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
     }
 }

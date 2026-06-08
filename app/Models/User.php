@@ -30,6 +30,7 @@ class User extends Authenticatable
         'last_credit_refresh_at',
         'has_received_profile_bonus',
         'is_first_analysis_free_used',
+        'is_first_resume_health_free_used',
         'is_pro',
         'pro_expires_at',
         'ai_credits',
@@ -50,6 +51,7 @@ class User extends Authenticatable
         'pro_expires_at'            => 'datetime',
         'has_received_profile_bonus'  => 'boolean',
         'is_first_analysis_free_used' => 'boolean',
+        'is_first_resume_health_free_used' => 'boolean',
     ];
 
     protected $appends = [
@@ -201,6 +203,45 @@ class User extends Authenticatable
             }
         }
         return trim($text);
+    }
+
+    public function applicationTracker()
+    {
+        return $this->hasMany(ApplicationTracker::class, 'user_id');
+    }
+
+    public function savedJobs()
+    {
+        return $this->belongsToMany(Jobs::class, 'saved_jobs', 'user_id', 'job_id')->withTimestamps();
+    }
+
+    /* ── RESUME TEXT SANITIZERS FOR UTF-8 COMPATIBILITY ── */
+    public function getResumeTextAttribute($value)
+    {
+        if (empty($value)) {
+            return '';
+        }
+        if (function_exists('mb_convert_encoding')) {
+            return mb_convert_encoding($value, 'UTF-8', 'UTF-8');
+        }
+        if (function_exists('iconv')) {
+            return iconv('UTF-8', 'UTF-8//IGNORE', $value);
+        }
+        return $value;
+    }
+
+    public function setResumeTextAttribute($value)
+    {
+        if (empty($value)) {
+            $sanitized = '';
+        } elseif (function_exists('mb_convert_encoding')) {
+            $sanitized = mb_convert_encoding($value, 'UTF-8', 'UTF-8');
+        } elseif (function_exists('iconv')) {
+            $sanitized = iconv('UTF-8', 'UTF-8//IGNORE', $value);
+        } else {
+            $sanitized = $value;
+        }
+        $this->attributes['resume_text'] = $sanitized;
     }
 }
 
