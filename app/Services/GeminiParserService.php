@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Log;
 class GeminiParserService
 {
     /**
-     * Parses raw HTML job description into distinct fields using Gemini 1.5 Flash.
+     * Parses raw HTML job description into distinct fields using Groq LLM.
      * 
      * @param string $htmlContent
      * @return array|null
@@ -21,28 +21,47 @@ class GeminiParserService
             return null;
         }
 
-        $prompt = "You are an expert HR data extractor. Extract the following from the job description text below.
-Constraints:
+        // ── Aggressive HTML Cleaning ──────────────────────────────────
+        // 1. Strip all HTML tags
+        $cleanText = strip_tags($htmlContent);
+        // 2. Decode HTML entities (&amp; &nbsp; etc.)
+        $cleanText = html_entity_decode($cleanText, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        // 3. Collapse all whitespace (multiple spaces, newlines, tabs → single space)
+        $cleanText = preg_replace('/\s+/', ' ', $cleanText);
+        // 4. Trim leading/trailing whitespace
+        $cleanText = trim($cleanText);
+        // 5. Truncate to ~2000 characters to stay within token limits
+        if (mb_strlen($cleanText) > 2000) {
+            $cleanText = mb_substr($cleanText, 0, 2000) . '...';
+        }
+
+        $prompt = "You are an expert HR data extractor for the Indian tech job market. Extract the following from the job description text below.
+
+STRICT RULES:
 - Return ONLY valid JSON matching the schema exactly.
-- NO HTML tags (no <ul>, <li>, <strong>, etc). Use simple, plain English text.
-- The TOTAL length of all combined text in your response MUST be around 300 words or less. Keep it very concise.
-- If a section is not present in the text, leave it as an empty string.
+- NO HTML tags anywhere. Use plain English text only.
+- The TOTAL length of all combined text in your response MUST be under 300 words. Be concise.
+- Separate list items with newline characters '\\n' for bullet point formatting.
+- If a field is not mentioned in the text, re-write roles/responsibilities and requirements based on the job description context. NEVER leave any field empty or null. 
+- For estimatedPayRange: ALWAYS provide a realistic INR LPA range based on the role, company reputation, and Indian tech market standards. Example: '4-8 LPA' for a fresher SDE at a mid-tier company, '12-20 LPA' for a fresher at a top product company.
+- For companyType: Classify based on the company name and role context.
 
 JSON Schema:
 {
-    \"rolesAndResponsibilities\": \"string (Plain English list of responsibilities. You MUST separate each distinct point with a newline character '\\n' so it can be formatted as bullet points)\",
-    \"requirements\": \"string (Plain English list of mandatory requirements. You MUST separate each distinct point with a newline character '\\n' so it can be formatted as bullet points)\",
-    \"niceToHave\": \"string (Plain English list of preferred/bonus qualifications. You MUST separate each distinct point with a newline character '\\n' so it can be formatted as bullet points)\",
-    \"eligibility\": \"string (e.g. B.Tech/M.Tech/MCA or 2023/2024 passout if mentioned, else empty)\",
-    \"expectedSalary\": \"string (Expected salary range in INR LPA if mentioned, else empty)\",
+    \"rolesAndResponsibilities\": \"string (Plain text list, each point separated by \\n)\",
+    \"requirements\": \"string (Plain text list of mandatory requirements, each point separated by \\n)\",
+    \"niceToHave\": \"string (Preferred/bonus qualifications, each point separated by \\n)\",
+    \"eligibility\": \"string (e.g. B.Tech/M.Tech/MCA, 2023-2025 passout, etc.)\",
+    \"estimatedPayRange\": \"string (Estimated salary range in INR LPA based on Indian market. ALWAYS provide an estimate even if not in JD. Format: 'X-Y LPA')\",
     \"jobRoleCategory\": \"string (Classify strictly as: fresher, intern, or experienced)\",
-    \"eligibleBatches\": \"string (Batches Description String e.g. 2024, 2025, 2026, 2027 passout batches)\",
-    \"jobDescription\": \"string (A short, concise summary about the company and the overall role)\",
-    \"seoTitle\": \"string (Best SEO-optimized job title for this job)\"
+    \"eligibleBatches\": \"string (e.g. 2023, 2024, 2025 passout batches)\",
+    \"jobDescription\": \"string (50-80 word concise summary about the company and role)\",
+    \"seoTitle\": \"string (Company name only, e.g. 'Google', 'Flipkart', 'Razorpay')\",
+    \"companyType\": \"string (Classify as: Product-Based, MNC, Service-Based, Startup, or Gaming Studio)\"
 }
 
 JOB TEXT:
-" . strip_tags($htmlContent);
+" . $cleanText;
 
         $url = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -51,7 +70,7 @@ JOB TEXT:
             'messages' => [
                 [
                     'role' => 'system',
-                    'content' => 'You are a helpful assistant that outputs only valid JSON.'
+                    'content' => 'You are a helpful assistant that outputs only valid JSON. Never include HTML tags or markdown formatting in your response.'
                 ],
                 [
                     'role' => 'user',
@@ -59,26 +78,62 @@ JOB TEXT:
                 ]
             ],
             'temperature' => 0.1,
+            'max_tokens' => 800,
             'response_format' => ['type' => 'json_object']
         ];
 
-        try {
-            $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $apiKey,
-                'Content-Type' => 'application/json',
-            ])->timeout(30)->post($url, $payload);
+        // ── Retry Logic with Exponential Backoff ──────────────────────
+        $maxRetries = 2;
+        $retryDelay = 30; // seconds
 
-            if ($response->successful()) {
-                $data = $response->json();
-                if (isset($data['choices'][0]['message']['content'])) {
-                    $jsonString = $data['choices'][0]['message']['content'];
-                    return json_decode($jsonString, true);
+        for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
+            try {
+                $response = Http::withHeaders([
+                    'Authorization' => 'Bearer ' . $apiKey,
+                    'Content-Type' => 'application/json',
+                ])->timeout(30)->post($url, $payload);
+
+                if ($response->successful()) {
+                    $data = $response->json();
+                    if (isset($data['choices'][0]['message']['content'])) {
+                        $jsonString = $data['choices'][0]['message']['content'];
+                        return json_decode($jsonString, true);
+                    }
                 }
-            } else {
-                Log::error('Groq API Error: ' . $response->body());
+
+                // Handle rate limiting (429)
+                $statusCode = $response->status();
+                if ($statusCode === 429 && $attempt < $maxRetries) {
+                    Log::warning("Groq API rate limited (429). Retry attempt " . ($attempt + 1) . " after {$retryDelay}s...");
+                    sleep($retryDelay);
+                    $retryDelay *= 2; // Exponential backoff: 30s → 60s
+                    continue;
+                }
+
+                Log::error('Groq API Error', [
+                    'status' => $statusCode,
+                    'body' => mb_substr($response->body(), 0, 500),
+                    'attempt' => $attempt + 1,
+                ]);
+
+                // Non-429 errors: don't retry
+                if ($statusCode !== 429) {
+                    return null;
+                }
+
+            } catch (\Exception $e) {
+                Log::error('Groq API Exception', [
+                    'message' => $e->getMessage(),
+                    'attempt' => $attempt + 1,
+                ]);
+
+                // On connection errors, retry with backoff
+                if ($attempt < $maxRetries) {
+                    sleep($retryDelay);
+                    $retryDelay *= 2;
+                    continue;
+                }
             }
-        } catch (\Exception $e) {
-            Log::error('Groq API Exception: ' . $e->getMessage());
         }
 
         return null;

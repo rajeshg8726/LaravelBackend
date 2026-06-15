@@ -30,6 +30,12 @@ class AuthController extends Controller
             'is_employer' => false,
         ]);
 
+        try {
+            \Illuminate\Support\Facades\Mail::to($user->email)->send(new \App\Mail\WelcomeEmail($user));
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Failed to send welcome email: ' . $e->getMessage());
+        }
+
         return response()->json(['success' => true, 'message' => 'Candidate registered successfully'], 201);
     }
 

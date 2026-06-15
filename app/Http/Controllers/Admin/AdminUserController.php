@@ -16,7 +16,7 @@ public function index(Request $request)
     $type       = $request->type ?? 'candidate';  // 'candidate' or 'employer'
     $isEmployer = ($type === 'employer');          // true or false
 
-    $query = User::where('is_employer', $isEmployer);  // ✅ uses is_employer column
+    $query = User::where('is_employer', $isEmployer)->withCount(['applicationTracker', 'jobMatches']);  // ✅ uses is_employer column
 
     if ($s = $request->search) {
         $query->where(function ($q) use ($s) {
@@ -36,6 +36,12 @@ public function index(Request $request)
     ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
 }
 
+    /** GET /api/admin/users/{id} */
+    public function show($id)
+    {
+        $user = User::withCount(['applicationTracker', 'jobMatches'])->findOrFail($id);
+        return response()->json(['success' => true, 'user' => $user]);
+    }
 
     /** PUT /api/admin/users/{id}/toggle-status */
     public function toggleStatus($id)
@@ -236,6 +242,35 @@ public function index(Request $request)
         return response()->json([
             'success' => true,
             'message' => 'Logs cleared successfully.'
+        ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
+    }
+
+    /** GET /api/admin/resume-checks */
+    public function resumeChecks(Request $request)
+    {
+        $perPage = 15;
+        $query = \App\Models\ResumeHealthCheck::query()
+            ->join('users', 'resume_health_checks.user_id', '=', 'users.id')
+            ->select(
+                'resume_health_checks.*',
+                'users.full_name as user_name',
+                'users.email as user_email'
+            );
+
+        if ($s = $request->search) {
+            $query->where(function ($q) use ($s) {
+                $q->where('users.full_name', 'like', "%{$s}%")
+                  ->orWhere('users.email', 'like', "%{$s}%");
+            });
+        }
+
+        $paginated = $query->latest('resume_health_checks.created_at')->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'checks' => $paginated->items(),
+            'total' => $paginated->total(),
+            'totalPages' => $paginated->lastPage()
         ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
     }
 }

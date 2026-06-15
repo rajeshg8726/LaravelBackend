@@ -8,8 +8,48 @@ use App\Models\JobMatch;
 use App\Models\Jobs;
 use Illuminate\Support\Facades\Log;
 
-class AiMatchController  extends Controller
+class AiMatchController extends Controller
 {
+    private function mutatePayloadForFreeTier(array $data)
+    {
+        // 1. Cover letter: Show only the greeting
+        if (!empty($data['cover_letter'])) {
+            $greetingMatch = preg_match('/^(.*?,\s*)/i', $data['cover_letter'], $matches);
+            if ($greetingMatch && !empty($matches[1])) {
+                $data['cover_letter'] = $matches[1] . "\n\n[Locked for PRO users. Upgrade to see full tailored cover letter.]";
+            } else {
+                $data['cover_letter'] = "Dear Hiring Manager,\n\n[Locked for PRO users. Upgrade to see full tailored cover letter.]";
+            }
+        }
+
+        // 2. Interview questions: Limit to 3
+        if (!empty($data['interview_questions']) && is_string($data['interview_questions'])) {
+            $questions = json_decode($data['interview_questions'], true);
+            if (is_array($questions)) {
+                $data['interview_questions'] = json_encode(array_slice($questions, 0, 3));
+            }
+        } elseif (is_array($data['interview_questions'] ?? null)) {
+            $data['interview_questions'] = array_slice($data['interview_questions'], 0, 3);
+        }
+
+        // 3. Lock optimized profile and salary benchmark
+        $data['optimized_profile'] = "[Locked for PRO users]";
+        
+        if (!empty($data['salary_benchmark'])) {
+            if (is_string($data['salary_benchmark'])) {
+                $salary = json_decode($data['salary_benchmark'], true);
+                if (is_array($salary)) {
+                    $salary['advice'] = "[Locked for PRO users]";
+                    $data['salary_benchmark'] = json_encode($salary);
+                }
+            } elseif (is_array($data['salary_benchmark'])) {
+                $data['salary_benchmark']['advice'] = "[Locked for PRO users]";
+            }
+        }
+
+        return $data;
+    }
+
     /* ──────────────────────────────────────────────────────────────────
      * MODEL CONFIG
      * Free users  → Groq + Llama 3.3 70B   (cheap & fast)
@@ -32,19 +72,23 @@ class AiMatchController  extends Controller
             ->where('job_id', $jobId)
             ->first();
 
-        if ($existingMatch && !$forceRefresh) {
-            return response()->json(['success' => true, 'data' => $existingMatch]);
-        }
-
-        if ($existingMatch && $forceRefresh) {
-            $existingMatch->delete();
-        }
-
-        // 2. Check and deduct credits (first analysis is free)
         // Evaluate PRO status here too — expired PRO users must use credits
         $isActivePro = $user->is_pro
             && $user->pro_expires_at !== null
             && $user->pro_expires_at->isFuture();
+
+        if ($existingMatch && $forceRefresh) {
+            $existingMatch->delete();
+            $existingMatch = null;
+        }
+
+        if ($existingMatch && !$forceRefresh) {
+            $data = $existingMatch->toArray();
+            if (!$isActivePro) {
+                $data = $this->mutatePayloadForFreeTier($data);
+            }
+            return response()->json(['success' => true, 'data' => $data]);
+        }
 
         $isFirstFree = !$user->is_first_analysis_free_used;
         $creditDeducted = false;
@@ -278,9 +322,14 @@ PROMPT;
                 $user->save();
             }
 
+            $responseData = $match->toArray();
+            if (!$isPro) {
+                $responseData = $this->mutatePayloadForFreeTier($responseData);
+            }
+
             return response()->json([
                 'success'     => true,
-                'data'        => $match,
+                'data'        => $responseData,
                 'ai_provider' => $isPro ? 'premium' : 'standard',
             ]);
         } catch (\Exception $e) {
@@ -697,10 +746,37 @@ PROMPT;
                 $aiData['overall_score'] = $computedScore;
             }
 
+            // Save check to database for admin tracking (store full report before locking sections for free users)
+            try {
+                \App\Models\ResumeHealthCheck::create([
+                    'user_id'       => $user->id,
+                    'overall_score' => $aiData['overall_score'] ?? 0,
+                    'raw_json'      => $aiData,
+                ]);
+            } catch (\Exception $ex) {
+                \Illuminate\Support\Facades\Log::error('Failed to log resume health check: ' . $ex->getMessage());
+            }
+
             // Mark first free analysis as used
             if (!$isActivePro && $isFirstFree) {
                 $user->is_first_resume_health_free_used = true;
                 $user->save();
+            }
+
+            if (!$isActivePro) {
+                // Return only overall_score + top_fixes[0:2] for free users
+                if (isset($aiData['top_fixes']) && is_array($aiData['top_fixes'])) {
+                    $aiData['top_fixes'] = array_slice($aiData['top_fixes'], 0, 2);
+                }
+                
+                // Hide detailed dimension feedback
+                if (isset($aiData['dimensions'])) {
+                    foreach ($aiData['dimensions'] as $key => $dim) {
+                        $aiData['dimensions'][$key]['feedback'] = '[Locked for PRO users. Upgrade to see detailed feedback.]';
+                    }
+                }
+                
+                $aiData['summary'] = '[Locked for PRO users]';
             }
 
             return response()->json([
@@ -725,6 +801,54 @@ PROMPT;
                 'debug'   => app()->environment('local') ? $e->getMessage() : null,
             ], 500);
         }
+    }
+
+    /* ──────────────────────────────────────────────────────────────────
+     * GET LATEST RESUME HEALTH SCORE
+     * Fetches the user's most recent ATS Readiness Analysis.
+     * ────────────────────────────────────────────────────────────── */
+    public function getLatestResumeHealth(Request $request)
+    {
+        $user = $request->user();
+        
+        $latestCheck = \App\Models\ResumeHealthCheck::where('user_id', $user->id)
+            ->orderBy('created_at', 'desc')
+            ->first();
+
+        if (!$latestCheck) {
+            return response()->json([
+                'success' => true,
+                'data' => null
+            ]);
+        }
+
+        $aiData = $latestCheck->raw_json;
+        if (is_string($aiData)) {
+            $aiData = json_decode($aiData, true);
+        }
+
+        $isActivePro = $user->is_pro
+            && $user->pro_expires_at !== null
+            && $user->pro_expires_at->isFuture();
+
+        if (!$isActivePro) {
+            // Apply free tier restrictions
+            if (isset($aiData['top_fixes']) && is_array($aiData['top_fixes'])) {
+                $aiData['top_fixes'] = array_slice($aiData['top_fixes'], 0, 2);
+            }
+            if (isset($aiData['dimensions'])) {
+                foreach ($aiData['dimensions'] as $key => $dim) {
+                    $aiData['dimensions'][$key]['feedback'] = '[Locked for PRO users. Upgrade to see detailed feedback.]';
+                }
+            }
+            $aiData['summary'] = '[Locked for PRO users]';
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $aiData,
+            'created_at' => $latestCheck->created_at
+        ]);
     }
 
     public function myMatches(Request $request)

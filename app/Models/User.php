@@ -80,33 +80,9 @@ class User extends Authenticatable
     /* ── LAZY/ON-DEMAND CREDIT REFRESH (OPTION A) ── */
     public function refreshCreditsIfEligible()
     {
-        if ($this->is_pro) {
-            return;
-        }
-
-        $now = now();
-
-        if (empty($this->last_credit_refresh_at)) {
-            $this->last_credit_refresh_at = $now;
-            $this->save();
-            return;
-        }
-
-        $lastRefresh = \Carbon\Carbon::parse($this->last_credit_refresh_at);
-        $diffInDays = $lastRefresh->diffInDays($now);
-
-        if ($diffInDays >= 7) {
-            $weeksPassed = (int) floor($diffInDays / 7);
-
-            if ($weeksPassed > 0) {
-                // Increment credits by +1 per week, capped at a maximum of 6 total credits
-                $newCredits = min($this->ai_credits + $weeksPassed, 6);
-                
-                $this->ai_credits = $newCredits;
-                $this->last_credit_refresh_at = $lastRefresh->addDays($weeksPassed * 7);
-                $this->save();
-            }
-        }
+        // Credit refresh is disabled per SaaS Monetization plan.
+        // Free users get 3 lifetime credits (+3 profile completion bonus).
+        return;
     }
 
     /* ── ONE-TIME PROFILE COMPLETION BONUS (+3 CREDITS) ── */
@@ -213,6 +189,16 @@ class User extends Authenticatable
     public function savedJobs()
     {
         return $this->belongsToMany(Jobs::class, 'saved_jobs', 'user_id', 'job_id')->withTimestamps();
+    }
+
+    public function jobMatches()
+    {
+        return $this->hasMany(JobMatch::class, 'user_id');
+    }
+
+    public function resumeHealthChecks()
+    {
+        return $this->hasMany(ResumeHealthCheck::class, 'user_id');
     }
 
     /* ── RESUME TEXT SANITIZERS FOR UTF-8 COMPATIBILITY ── */

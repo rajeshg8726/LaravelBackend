@@ -6,12 +6,13 @@ use Illuminate\Console\Command;
 use App\Models\Jobs;
 use App\Services\GeminiParserService;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 class ScrapeAtsJobs extends Command
 {
     protected $signature = 'jobs:scrape-ats';
-    protected $description = 'Scrape early career jobs from Greenhouse/Lever and parse via Gemini API';
+    protected $description = 'Scrape early career tech jobs from Greenhouse/Lever and parse via Groq API';
 
     public function handle(GeminiParserService $parser)
     {
@@ -139,11 +140,27 @@ class ScrapeAtsJobs extends Command
         shuffle($greenhouseBoards);
         shuffle($leverBoards);
 
-        $maxJobs = 1;
-        $jobsAdded = 0;
+        // ── Split Quota: 4 Greenhouse + 2 Lever = 6 total ────────────
+        $maxGreenhouse = 3;
+        $maxLever = 2;
+        $greenhouseAdded = 0;
+        $leverAdded = 0;
+        $totalAdded = 0;
 
+        // ── Track processed boards to avoid duplicate processing on restart ──
+        $cacheKey = 'scraper_processed_boards_' . date('Y-m-d');
+        $processedBoards = Cache::get($cacheKey, []);
+
+        // ═══════════════════════════════════════════════════════════════
+        // GREENHOUSE SCRAPING
+        // ═══════════════════════════════════════════════════════════════
         foreach ($greenhouseBoards as $board) {
-            if ($jobsAdded >= $maxJobs) break;
+            if ($greenhouseAdded >= $maxGreenhouse) break;
+
+            // Skip boards already processed today
+            if (in_array("gh_{$board}", $processedBoards)) {
+                continue;
+            }
 
             $this->info("Fetching Greenhouse jobs for: {$board}");
             
@@ -161,43 +178,58 @@ class ScrapeAtsJobs extends Command
 
             $jobs = $response->json('jobs') ?? [];
 
+            // Mark this board as processed today
+            $processedBoards[] = "gh_{$board}";
+            Cache::put($cacheKey, $processedBoards, now()->endOfDay());
+
             foreach ($jobs as $job) {
-                if ($jobsAdded >= $maxJobs) break;
+                if ($greenhouseAdded >= $maxGreenhouse) break;
 
                 $title = strtolower($job['title']);
                 $location = $job['location']['name'] ?? 'Remote';
                 
-                // Early Career Filter (Strict Title Match)
+                // ── Filter 1: Exclude Senior/Lead/Manager roles ──
                 if (
-                    Str::contains($title, ['senior', 'sr', 'staff', 'principal', 'director', 'lead', 'manager', 'head', 'architect', 'expert'])
+                    Str::contains($title, ['senior', 'sr', 'staff', 'principal', 'director', 'lead', 'manager', 'head', 'architect', 'expert', 'vp', 'president'])
                 ) {
                     continue;
                 }
 
+                // ── Filter 2: Must be early-career role ──
                 if (
-                    !Str::contains($title, ['intern', 'fresher', 'junior', 'jr', 'graduate', 'associate', 'early', 'entry']) 
+                    !Str::contains($title, ['intern', 'fresher', 'junior', 'jr', 'graduate', 'associate', 'early', 'entry', 'trainee', 'apprentice']) 
                 ) {
                     continue; 
                 }
 
-                // India Location Filter
+                // ── Filter 3: Must be in India ──
                 if (!$this->isLocationInIndia($location)) {
                     continue;
                 }
 
-                // Technical/Software Roles Filter
+                // ── Filter 4: Must be a technical/software role ──
                 if (!$this->isTechnicalSoftwareRole($job['title'])) {
                     continue;
                 }
 
-                // Check if already exists by link
+                // ── Filter 5: Duplicate check by joblink ──
                 if (Jobs::withoutGlobalScope('published')->where('joblink', $job['absolute_url'])->exists()) {
+                    continue;
+                }
+
+                // ── Filter 6: Duplicate check by role + company combo ──
+                if (Jobs::withoutGlobalScope('published')
+                    ->where('role', $job['title'])
+                    ->where('title', $board)
+                    ->exists()
+                ) {
+                    $this->line("   -> Skipped: Duplicate role+company combo.");
                     continue;
                 }
 
                 $this->info("Parsing matching job: {$job['title']}");
 
-                // Fetch job details (Greenhouse requires hitting the specific job ID endpoint for the HTML description)
+                // Fetch full job details (for description HTML)
                 try {
                     $detailRes = Http::timeout(15)->get("https://boards-api.greenhouse.io/v1/boards/{$board}/jobs/{$job['id']}");
                 } catch (\Exception $e) {
@@ -213,13 +245,29 @@ class ScrapeAtsJobs extends Command
                 $contentHtml = $detailRes->json('content') ?? '';
                 if (empty($contentHtml)) continue;
 
-                // Strict Experience Regex Filter
+                // ── Filter 7: Strict experience check on description ──
                 if ($this->requiresHighExperience($contentHtml)) {
                     $this->line("   -> Skipped: Description indicates 4+ years experience.");
                     continue;
                 }
 
+                // ── Call Groq LLM to parse ──
                 $parsedFields = $parser->parseJobDescription($contentHtml);
+
+                // Always sleep after a Groq call (success or failure) to respect rate limits
+                $this->line("   -> Sleeping 25s to respect Groq rate limits...");
+                sleep(25);
+
+                if ($parsedFields === null) {
+                    $this->warn("   -> Groq parsing failed for: {$job['title']}");
+                    continue;
+                }
+
+                // Double-check: if Groq classified it as "experienced", skip
+                if (isset($parsedFields['jobRoleCategory']) && strtolower($parsedFields['jobRoleCategory']) === 'experienced') {
+                    $this->line("   -> Skipped: Groq classified as 'experienced'.");
+                    continue;
+                }
 
                 $isIntern = Str::contains($title, 'intern');
                 if (isset($parsedFields['jobRoleCategory'])) {
@@ -228,13 +276,14 @@ class ScrapeAtsJobs extends Command
                     if (str_contains($cat, 'fresher')) $isIntern = false;
                 }
                 
-                $jobtypeId = \App\Models\DomainCat::where('name', 'like', $isIntern ? '%Intern%' : '%Full Time%')->value('id');
+                $jobtypeValue = $parsedFields['companyType'] ?? null;
+                $jobtypeId = $this->getCompanyTypeId($jobtypeValue);
                 $locationId = \App\Models\LocationCat::where('name', 'like', '%' . $location . '%')->value('id');
                 $expLevelId = \App\Models\ExpLevelCat::where('name', 'like', $isIntern ? '%Intern%' : '%Fresher%')->value('id');
 
                 Jobs::create([
                     'title' => $parsedFields['seoTitle'] ?? $job['title'],
-                    'role' => $job['title'], // default to title
+                    'role' => $job['title'],
                     'location' => $location,
                     'joblink' => $job['absolute_url'],
                     'description' => $parsedFields['jobDescription'] ?? strip_tags($contentHtml),
@@ -242,26 +291,30 @@ class ScrapeAtsJobs extends Command
                     'requirements' => $parsedFields['requirements'] ?? null,
                     'niceToHave' => $parsedFields['niceToHave'] ?? null,
                     'eligibility' => $parsedFields['eligibility'] ?? null,
-                    'pay' => $parsedFields['expectedSalary'] ?? null,
+                    'pay' => $parsedFields['estimatedPayRange'] ?? null,
                     'batches' => $parsedFields['eligibleBatches'] ?? null,
                     'status' => 'draft',
                     'jobtype' => $jobtypeId,
                     'jobbycity' => $locationId,
                     'jobexplevel' => $expLevelId,
-                    // other int fields are safely defaulted to null
                 ]);
 
-                $jobsAdded++;
-                $this->info("Added Draft Job ({$jobsAdded}/{$maxJobs}) - {$job['title']}");
-                
-                // Sleep to respect rate limits
-                sleep(2);
+                $greenhouseAdded++;
+                $totalAdded++;
+                $this->info("✓ Added Greenhouse Draft ({$totalAdded}/6) - {$job['title']}");
             }
         }
 
-        // --- Lever API Scraping ---
+        // ═══════════════════════════════════════════════════════════════
+        // LEVER SCRAPING
+        // ═══════════════════════════════════════════════════════════════
         foreach ($leverBoards as $board) {
-            if ($jobsAdded >= $maxJobs) break;
+            if ($leverAdded >= $maxLever) break;
+
+            // Skip boards already processed today
+            if (in_array("lv_{$board}", $processedBoards)) {
+                continue;
+            }
 
             $this->info("Fetching Lever jobs for: {$board}");
             
@@ -279,57 +332,90 @@ class ScrapeAtsJobs extends Command
 
             $jobs = $response->json() ?? [];
 
+            // Mark this board as processed today
+            $processedBoards[] = "lv_{$board}";
+            Cache::put($cacheKey, $processedBoards, now()->endOfDay());
+
             foreach ($jobs as $job) {
-                if ($jobsAdded >= $maxJobs) break;
+                if ($leverAdded >= $maxLever) break;
 
                 $title = strtolower($job['text'] ?? '');
                 $location = $job['categories']['location'] ?? 'Remote';
                 
-                // Early Career Filter
-                if (Str::contains($title, ['senior', 'sr', 'staff', 'principal', 'director', 'lead', 'manager', 'head', 'architect', 'expert'])) {
+                // ── Filter 1: Exclude Senior/Lead/Manager roles ──
+                if (Str::contains($title, ['senior', 'sr', 'staff', 'principal', 'director', 'lead', 'manager', 'head', 'architect', 'expert', 'vp', 'president'])) {
                     continue;
                 }
-                if (!Str::contains($title, ['intern', 'fresher', 'junior', 'jr', 'graduate', 'associate', 'early', 'entry'])) {
+
+                // ── Filter 2: Must be early-career role ──
+                if (!Str::contains($title, ['intern', 'fresher', 'junior', 'jr', 'graduate', 'associate', 'early', 'entry', 'trainee', 'apprentice'])) {
                     continue; 
                 }
 
-                // India Location Filter
+                // ── Filter 3: Must be in India ──
                 if (!$this->isLocationInIndia($location)) {
                     continue;
                 }
 
-                // Technical/Software Roles Filter
+                // ── Filter 4: Must be a technical/software role ──
                 if (!$this->isTechnicalSoftwareRole($job['text'] ?? '')) {
                     continue;
                 }
 
+                // ── Filter 5: Duplicate check by joblink ──
                 if (Jobs::withoutGlobalScope('published')->where('joblink', $job['hostedUrl'])->exists()) {
+                    continue;
+                }
+
+                // ── Filter 6: Duplicate check by role + company combo ──
+                if (Jobs::withoutGlobalScope('published')
+                    ->where('role', $job['text'])
+                    ->where('title', $board)
+                    ->exists()
+                ) {
+                    $this->line("   -> Skipped: Duplicate role+company combo.");
                     continue;
                 }
 
                 $this->info("Parsing matching Lever job: {$job['text']}");
 
+                // Build content: prefer plain text, append lists
                 $contentHtml = $job['descriptionPlain'] ?? $job['description'] ?? '';
-                // Append Lever lists (requirements, etc.) to content HTML if available
                 if (isset($job['lists']) && is_array($job['lists'])) {
                     foreach ($job['lists'] as $list) {
                         $contentList = $list['content'] ?? [''];
                         if (!is_array($contentList)) {
                             $contentList = [$contentList];
                         }
-                        $contentHtml .= "<h3>" . ($list['text'] ?? '') . "</h3><ul><li>" . implode("</li><li>", $contentList) . "</li></ul>";
+                        $contentHtml .= "\n" . ($list['text'] ?? '') . "\n" . implode("\n", array_map('strip_tags', $contentList));
                     }
                 }
 
                 if (empty($contentHtml)) continue;
 
-                // Strict Experience Regex Filter
+                // ── Filter 7: Strict experience check on description ──
                 if ($this->requiresHighExperience($contentHtml)) {
                     $this->line("   -> Skipped: Description indicates 4+ years experience.");
                     continue;
                 }
 
+                // ── Call Groq LLM to parse ──
                 $parsedFields = $parser->parseJobDescription($contentHtml);
+
+                // Always sleep after a Groq call (success or failure)
+                $this->line("   -> Sleeping 25s to respect Groq rate limits...");
+                sleep(25);
+
+                if ($parsedFields === null) {
+                    $this->warn("   -> Groq parsing failed for: {$job['text']}");
+                    continue;
+                }
+
+                // Double-check: if Groq classified it as "experienced", skip
+                if (isset($parsedFields['jobRoleCategory']) && strtolower($parsedFields['jobRoleCategory']) === 'experienced') {
+                    $this->line("   -> Skipped: Groq classified as 'experienced'.");
+                    continue;
+                }
 
                 $isIntern = Str::contains($title, 'intern');
                 if (isset($parsedFields['jobRoleCategory'])) {
@@ -338,7 +424,8 @@ class ScrapeAtsJobs extends Command
                     if (str_contains($cat, 'fresher')) $isIntern = false;
                 }
 
-                $jobtypeId = \App\Models\DomainCat::where('name', 'like', $isIntern ? '%Intern%' : '%Full Time%')->value('id');
+                $jobtypeValue = $parsedFields['companyType'] ?? null;
+                $jobtypeId = $this->getCompanyTypeId($jobtypeValue);
                 $locationId = \App\Models\LocationCat::where('name', 'like', '%' . $location . '%')->value('id');
                 $expLevelId = \App\Models\ExpLevelCat::where('name', 'like', $isIntern ? '%Intern%' : '%Fresher%')->value('id');
 
@@ -352,7 +439,7 @@ class ScrapeAtsJobs extends Command
                     'requirements' => $parsedFields['requirements'] ?? null,
                     'niceToHave' => $parsedFields['niceToHave'] ?? null,
                     'eligibility' => $parsedFields['eligibility'] ?? null,
-                    'pay' => $parsedFields['expectedSalary'] ?? null,
+                    'pay' => $parsedFields['estimatedPayRange'] ?? null,
                     'batches' => $parsedFields['eligibleBatches'] ?? null,
                     'status' => 'draft',
                     'jobtype' => $jobtypeId,
@@ -360,34 +447,38 @@ class ScrapeAtsJobs extends Command
                     'jobexplevel' => $expLevelId,
                 ]);
 
-                $jobsAdded++;
-                $this->info("Added Draft Job ({$jobsAdded}/{$maxJobs}) - {$job['text']}");
-                
-                sleep(2);
+                $leverAdded++;
+                $totalAdded++;
+                $this->info("✓ Added Lever Draft ({$totalAdded}/6) - {$job['text']}");
             }
         }
 
-        $this->info("Scraping complete. Added {$jobsAdded} new jobs as draft.");
+        $this->info("═══════════════════════════════════════════════");
+        $this->info("Scraping complete. Added {$totalAdded} new jobs (Greenhouse: {$greenhouseAdded}, Lever: {$leverAdded}).");
         return Command::SUCCESS;
     }
 
+    /**
+     * Determines if a job title is a technical/software role.
+     * Uses a strict blacklist + whitelist approach.
+     */
     private function isTechnicalSoftwareRole(string $title): bool
     {
         $title = strtolower($title);
 
-        // 1. Exclude Senior / Manager / Lead / Director roles
+        // 1. Exclude Senior / Manager / Lead / Director roles (redundant safety net)
         if (preg_match('/\b(senior|sr|staff|principal|director|lead|manager|head|vp|president|expert|architect)\b/i', $title)) {
             return false;
         }
 
         // 2. Exclude Non-technical roles (Blacklist - EXPANDED)
-        $blacklistRegex = '/\b(support|helpdesk|help desk|customer|sales|marketing|hr|human resources|recruiter|recruiting|talent|operations|ops|designer|design|finance|accounting|accountant|legal|writer|content|admin|administrator|coordinator|executive|assistant|business analyst|product manager|product owner|consultant|strategist|compliance|media|copywriter|editor|purchasing|buyer|logistics|supply chain|growth)\b/i';
+        $blacklistRegex = '/\b(support|helpdesk|help desk|customer|sales|marketing|hr|human resources|recruiter|recruiting|talent|operations|ops|designer|design|finance|accounting|accountant|legal|writer|content|admin|administrator|coordinator|executive|assistant|business analyst|product manager|product owner|consultant|strategist|compliance|media|copywriter|editor|purchasing|buyer|logistics|supply chain|growth|social media|pr |public relations|receptionist|clerk|secretary)\b/i';
         if (preg_match($blacklistRegex, $title)) {
             return false;
         }
 
         // 3. Include only Technical / Software role keywords (Whitelist - STRICT)
-        $whitelistRegex = '/\b(software|developer|engineer|sde|programmer|coder|frontend|backend|fullstack|full-stack|devops|cloud|qa|test|testing|sdet|data|analytics|machine learning|ml|ai|artificial intelligence|systems|network|security|cybersecurity|database|db|infrastructure|mobile|android|ios|sre)\b/i';
+        $whitelistRegex = '/\b(software|developer|engineer|sde|programmer|coder|frontend|backend|fullstack|full-stack|devops|cloud|qa|test|testing|sdet|data|analytics|machine learning|ml|ai|artificial intelligence|systems|network|security|cybersecurity|database|db|infrastructure|mobile|android|ios|sre|platform|site reliability|automation|embedded|firmware|hardware|computer science|cs|it |information technology)\b/i';
         if (preg_match($whitelistRegex, $title)) {
             return true;
         }
@@ -395,6 +486,9 @@ class ScrapeAtsJobs extends Command
         return false;
     }
 
+    /**
+     * Checks if a location string indicates India.
+     */
     private function isLocationInIndia(string $location): bool
     {
         $location = strtolower($location);
@@ -403,7 +497,8 @@ class ScrapeAtsJobs extends Command
             'india', 'bangalore', 'bengaluru', 'hyderabad', 'pune', 'mumbai', 
             'delhi', 'new delhi', 'noida', 'gurugram', 'gurgaon', 'chennai', 
             'kolkata', 'ahmedabad', 'thiruvananthapuram', 'trivandrum', 'kochi',
-            'indore', 'chandigarh', 'jaipur'
+            'indore', 'chandigarh', 'jaipur', 'lucknow', 'coimbatore', 'nagpur',
+            'visakhapatnam', 'vizag', 'bhubaneswar', 'mangalore', 'mysore', 'mysuru'
         ];
 
         foreach ($indiaKeywords as $keyword) {
@@ -420,20 +515,106 @@ class ScrapeAtsJobs extends Command
         return false;
     }
 
+    /**
+     * Checks if a job description indicates 4+ years of experience required.
+     * Parses ALL experience range mentions and rejects if the UPPER BOUND exceeds 3 years.
+     * 
+     * Examples that PASS (allowed):
+     *   - "0-2 years" → upper=2 ✓
+     *   - "1-3 years of experience" → upper=3 ✓
+     *   - "0+ years" → upper=0 ✓
+     *   
+     * Examples that FAIL (rejected):
+     *   - "2-7 years" → upper=7 ✗
+     *   - "3-5 years" → upper=5 ✗  
+     *   - "4+ years" → upper=4 ✗
+     *   - "5 years of experience" → upper=5 ✗
+     *   - "minimum 4 years" → upper=4 ✗
+     */
     private function requiresHighExperience(string $contentHtml): bool
     {
         $text = strtolower(strip_tags($contentHtml));
 
-        // Match "X years of experience" where X >= 4
-        $pattern1 = '/\b([4-9]|[1-9]\d{1,2})\+?\s*(?:-|to)?\s*(?:\d+)?\s*(?:years?|yrs?)\s+(?:of\s+)?experience\b/i';
-        
-        // Match "Experience: X+ years" where X >= 4
-        $pattern2 = '/\bexperience[\s:]*(?:of\s*)?([4-9]|[1-9]\d{1,2})\+?\s*(?:-|to)?\s*(?:\d+)?\s*(?:years?|yrs?)\b/i';
+        // ── Pattern 1: Range format "X-Y years" or "X to Y years" ──
+        // Captures: "2-7 years", "3 to 5 years", "2 - 4 yrs experience"
+        if (preg_match_all('/(\d+)\s*(?:-|to)\s*(\d+)\s*\+?\s*(?:years?|yrs?)\b/i', $text, $matches)) {
+            foreach ($matches[2] as $upperBound) {
+                if ((int) $upperBound > 3) {
+                    return true;
+                }
+            }
+        }
 
-        if (preg_match($pattern1, $text) || preg_match($pattern2, $text)) {
-            return true;
+        // ── Pattern 2: Single number "X+ years" or "X years of experience" ──
+        // Captures: "4+ years", "5 years of experience", "7 yrs"
+        if (preg_match_all('/\b(\d+)\s*\+?\s*(?:years?|yrs?)\s+(?:of\s+)?(?:relevant\s+|professional\s+|hands[- ]on\s+|industry\s+)?experience\b/i', $text, $matches)) {
+            foreach ($matches[1] as $years) {
+                if ((int) $years > 3) {
+                    return true;
+                }
+            }
+        }
+
+        // ── Pattern 3: "minimum X years" or "at least X years" ──
+        if (preg_match_all('/(?:minimum|at\s+least|min\.?)\s*(\d+)\s*\+?\s*(?:years?|yrs?)/i', $text, $matches)) {
+            foreach ($matches[1] as $years) {
+                if ((int) $years > 3) {
+                    return true;
+                }
+            }
+        }
+
+        // ── Pattern 4: "experience of X+ years" or "experience: X years" ──
+        if (preg_match_all('/experience[\s:]*(?:of\s*)?(\d+)\s*\+?\s*(?:-|to)?\s*(?:\d+)?\s*(?:years?|yrs?)/i', $text, $matches)) {
+            foreach ($matches[1] as $years) {
+                if ((int) $years > 3) {
+                    return true;
+                }
+            }
+        }
+
+        // ── Pattern 5: Seniority phrases that strongly imply 5+ years ──
+        $seniorPhrases = [
+            'extensive experience',
+            'seasoned professional',
+            'deep expertise',
+            'proven track record',
+            'significant experience',
+            'substantial experience',
+        ];
+        foreach ($seniorPhrases as $phrase) {
+            if (str_contains($text, $phrase)) {
+                return true;
+            }
         }
 
         return false;
+    }
+
+    /**
+     * Maps the companyType string from Groq to the corresponding integer ID in jobsbcompanytype table.
+     */
+    private function getCompanyTypeId(?string $companyType): ?int
+    {
+        if (!$companyType) return null;
+        
+        $type = strtolower($companyType);
+        $search = null;
+        
+        if (str_contains($type, 'product')) {
+            $search = 'Product';
+        } elseif (str_contains($type, 'service')) {
+            $search = 'Service';
+        } elseif (str_contains($type, 'startup')) {
+            $search = 'Startup';
+        } elseif (str_contains($type, 'mnc')) {
+            $search = 'MNC';
+        } elseif (str_contains($type, 'remote')) {
+            $search = 'Remote';
+        } else {
+            $search = $companyType;
+        }
+
+        return \App\Models\Companies::where('name', 'like', '%' . $search . '%')->value('id');
     }
 }

@@ -30,6 +30,13 @@ class AdminJobController extends Controller
         $totalTxCount = $successfulTxCount + $failedTxCount + $pendingTxCount;
         $txConversionRate = $totalTxCount > 0 ? (int) round(($successfulTxCount / $totalTxCount) * 100) : 100;
 
+        $resumeTotalChecks = \App\Models\ResumeHealthCheck::count();
+        $resumeUniqueUsers = \App\Models\ResumeHealthCheck::distinct('user_id')->count('user_id');
+        $resumeAvgScore = (int) round(\App\Models\ResumeHealthCheck::avg('overall_score') ?? 0);
+        $resumeScoreGood = \App\Models\ResumeHealthCheck::where('overall_score', '>=', 42)->count();
+        $resumeScoreWarning = \App\Models\ResumeHealthCheck::where('overall_score', '>=', 18)->where('overall_score', '<', 42)->count();
+        $resumeScorePoor = \App\Models\ResumeHealthCheck::where('overall_score', '<', 18)->count();
+
         return response()->json([
             'success' => true,
             'stats'   => [
@@ -48,6 +55,14 @@ class AdminJobController extends Controller
                 'txConversionRate' => $txConversionRate,
                 'successfulTx'    => $successfulTxCount,
                 'failedTx'        => $failedTxCount,
+
+                // Add Resume Health Checker Stats
+                'resumeTotalChecks'    => $resumeTotalChecks,
+                'resumeUniqueUsers'    => $resumeUniqueUsers,
+                'resumeAvgScore'       => $resumeAvgScore,
+                'resumeScoreGood'      => $resumeScoreGood,
+                'resumeScoreWarning'   => $resumeScoreWarning,
+                'resumeScorePoor'      => $resumeScorePoor,
             ],
             'recentJobs' => Jobs::withoutGlobalScope('published')->latest()
                 ->take(10)
@@ -95,6 +110,8 @@ class AdminJobController extends Controller
             $query->where('is_urgent', true);
         } elseif ($request->filter === 'old') {
             $query->where('created_at', '<', now()->subDays(30));
+        } elseif ($request->filter === 'old_60') {
+            $query->where('created_at', '<', now()->subDays(60));
         }
 
         $paginated = $query->latest()->paginate($perPage);

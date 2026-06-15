@@ -61,6 +61,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/candidate/generate-match', [AiMatchController::class, 'generateMatch']);
     Route::get('/candidate/my-ai-matches', [AiMatchController::class, 'myMatches']);
     Route::post('/candidate/resume-health', [AiMatchController::class, 'resumeHealth']);
+    Route::get('/candidate/resume-health/latest', [AiMatchController::class, 'getLatestResumeHealth']);
 
     // Application Tracker Routes
     Route::apiResource('tracker', TrackerController::class);
@@ -210,10 +211,12 @@ Route::prefix('admin')->group(function () {
         Route::post('/jobs/{id}/logo',         [AdminJobController::class, 'uploadLogo']);
         // Users
         Route::get('/users',                        [AdminUserController::class, 'index']);
+        Route::get('/users/{id}',                   [AdminUserController::class, 'show']);
         Route::put('/users/{id}/toggle-status',     [AdminUserController::class, 'toggleStatus']);
         Route::put('/users/{id}/revoke-pro',        [AdminUserController::class, 'revokePro']);
         Route::get('/pro-subscribers',              [AdminUserController::class, 'proSubscribers']);
         Route::get('/ai-usage',                     [AdminUserController::class, 'aiUsage']);
+        Route::get('/resume-checks',                [AdminUserController::class, 'resumeChecks']);
         Route::get('/transactions',                 [AdminUserController::class, 'transactions']);
         Route::get('/logs',                         [AdminUserController::class, 'getLogs']);
         Route::delete('/logs/clear',                [AdminUserController::class, 'clearLogs']);
