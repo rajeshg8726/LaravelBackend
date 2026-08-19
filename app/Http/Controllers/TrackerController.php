@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Log;
 
 class TrackerController extends Controller
 {
-    private string $groqModel   = 'llama-3.3-70b-versatile';
+    private string $groqModel   = 'openai/gpt-oss-120b';
     private string $geminiModel = 'gemini-2.5-flash';
 
     public function index(Request $request)

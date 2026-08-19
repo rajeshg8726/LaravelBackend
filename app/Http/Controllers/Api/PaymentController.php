@@ -23,14 +23,14 @@ class PaymentController extends Controller
     {
         $user = $request->user();
         
-        // Accept package_type: 'PRO' (₹199) or 'TOPUP' (₹29)
+        // Accept package_type: 'PRO' (₹199) or 'TOPUP' (₹49)
         $packageType = $request->input('package_type', 'PRO');
-        $amount = ($packageType === 'TOPUP') ? 29 : 199;
+        $amount = ($packageType === 'TOPUP') ? 49 : 199;
 
         // Create order in Razorpay (amount must be in paise)
         $orderData = [
             'receipt'         => 'rcptid_' . uniqid(),
-            'amount'          => $amount * 100, // 2900 or 19900 paise
+            'amount'          => $amount * 100, // 4900 or 19900 paise
             'currency'        => 'INR',
             'payment_capture' => 1 // auto capture
         ];

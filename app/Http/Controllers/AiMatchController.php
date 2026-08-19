@@ -52,10 +52,10 @@ class AiMatchController extends Controller
 
     /* ──────────────────────────────────────────────────────────────────
      * MODEL CONFIG
-     * Free users  → Groq + Llama 3.3 70B   (cheap & fast)
+     * Free users  → Groq + GPT OSS 120B     (cheap & fast)
      * PRO  users  → Gemini 2.5 Flash        (premium quality)
      * ────────────────────────────────────────────────────────────── */
-    private string $groqModel   = 'llama-3.3-70b-versatile';
+    private string $groqModel   = 'openai/gpt-oss-120b';
     private string $geminiModel = 'gemini-2.5-flash';
 
     public function generateMatch(Request $request)
@@ -249,7 +249,7 @@ PROMPT;
                 $rawText = $this->callGroq($systemInstruction, $prompt);
             }
         } else {
-            // ── Free users: Groq + Llama 3.3 70B (fast & cheap) ──
+            // ── Free users: Groq + GPT OSS 120B (fast & cheap) ──
             $rawText = $this->callGroq($systemInstruction, $prompt);
         }
 
